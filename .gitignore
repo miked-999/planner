@@ -2,7 +2,7 @@
 node_modules/
 frontend/dist/
 frontend/dist-ssr/
-frontend/node_moduless/
+frontend/node_modules/
 *.tsbuildinfo
 npm-debug.log*
 yarn-debug.log*
