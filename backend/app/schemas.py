@@ -7,7 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-ProjectStatus = Literal["planned", "in_progress", "on_hold", "completed"]
+ProjectStatus = Literal["backlog", "planned", "in_progress", "on_hold", "completed"]
 PriorityLevel = Literal["low", "medium", "high"]
 EntityType = Literal["project", "task"]
 
@@ -46,9 +46,10 @@ class Project(BaseModel):
     id: str = Field(min_length=1)
     name: str = Field(min_length=1, max_length=200)
     description: str = ""
-    expected_start: str
+    expected_start: str | None = None
     actual_start: str | None = None
-    expected_end: str
+    expected_end: str | None = None
+    estimated_days: int | None = Field(default=10, ge=1, le=500)
     original_expected_end: str | None = None
     required_by: str | None = None
     actual_end: str | None = None
@@ -62,20 +63,36 @@ class Project(BaseModel):
 
     @model_validator(mode="after")
     def validate_dates(self) -> Project:
-        s = _parse_iso_date(self.expected_start, "expected_start")
-        e = _parse_iso_date(self.expected_end, "expected_end")
-        if e < s:
-            raise ValueError(f"Project {self.name!r}: expected_end cannot be before expected_start")
+        if self.expected_start == "":
+            self.expected_start = None
+        if self.expected_end == "":
+            self.expected_end = None
+
+        if (self.expected_start is None) != (self.expected_end is None):
+            raise ValueError(
+                f"Project {self.name!r}: expected_start and expected_end must both be set or both be null (unscheduled)"
+            )
+        if self.expected_start and self.expected_end:
+            s = _parse_iso_date(self.expected_start, "expected_start")
+            e = _parse_iso_date(self.expected_end, "expected_end")
+            if e < s:
+                raise ValueError(
+                    f"Project {self.name!r}: expected_end cannot be before expected_start"
+                )
+            if self.original_expected_end:
+                _parse_iso_date(self.original_expected_end, "original_expected_end")
+            else:
+                self.original_expected_end = self.expected_end
+        else:
+            if self.original_expected_end:
+                _parse_iso_date(self.original_expected_end, "original_expected_end")
+
         if self.actual_start:
             _parse_iso_date(self.actual_start, "actual_start")
         if self.actual_end:
             _parse_iso_date(self.actual_end, "actual_end")
         if self.required_by:
             _parse_iso_date(self.required_by, "required_by")
-        if self.original_expected_end:
-            _parse_iso_date(self.original_expected_end, "original_expected_end")
-        else:
-            self.original_expected_end = self.expected_end
         return self
 
 
@@ -84,9 +101,9 @@ class Task(BaseModel):
     project_id: str = Field(min_length=1)
     name: str = Field(min_length=1, max_length=200)
     description: str = ""
-    expected_start: str
+    expected_start: str | None = None
     actual_start: str | None = None
-    expected_end: str
+    expected_end: str | None = None
     original_expected_end: str | None = None
     required_by: str | None = None
     actual_end: str | None = None
@@ -98,20 +115,36 @@ class Task(BaseModel):
 
     @model_validator(mode="after")
     def validate_dates(self) -> Task:
-        s = _parse_iso_date(self.expected_start, "expected_start")
-        e = _parse_iso_date(self.expected_end, "expected_end")
-        if e < s:
-            raise ValueError(f"Task {self.name!r}: expected_end cannot be before expected_start")
+        if self.expected_start == "":
+            self.expected_start = None
+        if self.expected_end == "":
+            self.expected_end = None
+
+        if (self.expected_start is None) != (self.expected_end is None):
+            raise ValueError(
+                f"Task {self.name!r}: expected_start and expected_end must both be set or both be null"
+            )
+        if self.expected_start and self.expected_end:
+            s = _parse_iso_date(self.expected_start, "expected_start")
+            e = _parse_iso_date(self.expected_end, "expected_end")
+            if e < s:
+                raise ValueError(
+                    f"Task {self.name!r}: expected_end cannot be before expected_start"
+                )
+            if self.original_expected_end:
+                _parse_iso_date(self.original_expected_end, "original_expected_end")
+            else:
+                self.original_expected_end = self.expected_end
+        else:
+            if self.original_expected_end:
+                _parse_iso_date(self.original_expected_end, "original_expected_end")
+
         if self.actual_start:
             _parse_iso_date(self.actual_start, "actual_start")
         if self.actual_end:
             _parse_iso_date(self.actual_end, "actual_end")
         if self.required_by:
             _parse_iso_date(self.required_by, "required_by")
-        if self.original_expected_end:
-            _parse_iso_date(self.original_expected_end, "original_expected_end")
-        else:
-            self.original_expected_end = self.expected_end
         return self
 
 

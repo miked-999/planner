@@ -31,7 +31,10 @@ def test_empty_and_seed_plan(client: TestClient) -> None:
     seed_res = client.post("/api/plan/seed")
     assert seed_res.status_code == 200
     seeded = seed_res.json()
-    assert len(seeded["projects"]) == 5
+    assert len(seeded["projects"]) == 7
+    backlog = [p for p in seeded["projects"] if p["status"] == "backlog"]
+    assert len(backlog) == 2
+    assert backlog[0]["expected_start"] is None
     assert len(seeded["people"]) == 5
     assert len(seeded["tasks"]) == 6
     assert len(seeded["dependencies"]) == 6
@@ -81,7 +84,7 @@ def test_json_export_and_import_roundtrip(client: TestClient) -> None:
     imp = client.post("/api/import/json", json=envelope)
     assert imp.status_code == 200
     restored = imp.json()
-    assert len(restored["projects"]) == 5
+    assert len(restored["projects"]) == 7
     assert len(restored["assignments"]) == len(seeded["assignments"])
 
 
@@ -125,7 +128,7 @@ def test_backups_create_list_restore_delete(client: TestClient) -> None:
     snap_res = client.post("/api/backups", json={"label": "Before big change"})
     assert snap_res.status_code == 200
     snap = snap_res.json()
-    assert snap["project_count"] == 5
+    assert snap["project_count"] == 7
 
     # Clear live DB
     client.post("/api/plan/clear")
@@ -134,7 +137,7 @@ def test_backups_create_list_restore_delete(client: TestClient) -> None:
     # Restore from snapshot
     restore_res = client.post(f"/api/backups/{snap['filename']}/restore")
     assert restore_res.status_code == 200
-    assert len(restore_res.json()["projects"]) == 5
+    assert len(restore_res.json()["projects"]) == 7
 
     # List and delete
     backups = client.get("/api/backups").json()
@@ -214,15 +217,22 @@ def test_tbd_placeholder_assignments_and_v1_migration(
         assert saved_tbd["person_id"] is None
         assert saved_tbd["placeholder_label"] == "TBD — Lead Reviewer"
 
-        # Also verify CSV import recognises TBD tokens without creating a fake person named TBD
+        # Also verify CSV import recognises TBD tokens AND dateless backlog rows
         csv_text = (
-            "Name,Expected Start,Expected End,Assigned People\n"
-            "Future Initiative,2027-01-05,2027-01-22,TBD: Data Engineer (75%)\n"
+            "Name,Expected Start,Expected End,Estimated Days,Assigned People\n"
+            "Future Initiative,2027-01-05,2027-01-22,14,TBD: Data Engineer (75%)\n"
+            "Unscheduled Idea,,,15,\n"
         )
         imp = c.post("/api/import/csv/projects", json={"csv_text": csv_text, "mode": "merge"})
         assert imp.status_code == 200
         body = imp.json()
+        assert body["imported_count"] == 2
         assert body["created_people"] == []
+        backlog_proj = [p for p in body["plan"]["projects"] if p["name"] == "Unscheduled Idea"][0]
+        assert backlog_proj["status"] == "backlog"
+        assert backlog_proj["expected_start"] is None
+        assert backlog_proj["expected_end"] is None
+        assert backlog_proj["estimated_days"] == 15
         assert any(
             a["person_id"] is None and "Data Engineer" in (a["placeholder_label"] or "")
             for a in body["plan"]["assignments"]

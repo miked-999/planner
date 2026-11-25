@@ -14,7 +14,13 @@ import {
   workingDaysSignedDiff,
 } from './dates';
 import { canAddDependency, previewDependencyCascade } from './dependencies';
-import { computeScheduleMetrics, recalculateProjectRollups, updateProjectDates } from './rollup';
+import {
+  computeScheduleMetrics,
+  recalculateProjectRollups,
+  scheduleProjectFromBacklog,
+  unscheduleProjectToBacklog,
+  updateProjectDates,
+} from './rollup';
 
 function basePlan(): PlanDocument {
   return {
@@ -297,6 +303,29 @@ describe('capacity, mid-week handoff, and rollup rules', () => {
     expect(ranked[1].personId).toBe('p-alice');
     expect(ranked[1].fitStatus).toBe('conflict');
     expect(ranked[1].peakWeeklyAfterPct).toBe(150);
+  });
+
+  it('supports dateless backlog projects with zero capacity impact and schedules them using estimated_days', () => {
+    const plan = basePlan();
+    // Move Project B (10 working days) into the unscheduled backlog
+    const withBacklog = unscheduleProjectToBacklog(plan, 'proj-b');
+    const bUnscheduled = withBacklog.projects.find((p) => p.id === 'proj-b')!;
+    expect(bUnscheduled.status).toBe('backlog');
+    expect(bUnscheduled.expected_start).toBeNull();
+    expect(bUnscheduled.expected_end).toBeNull();
+    expect(bUnscheduled.estimated_days).toBe(10);
+
+    // Confirm Alice has 0% load during Feb 16–27 while Project B is unscheduled in backlog
+    const weeks = generateWeeks('2026-02-16', '2026-02-27');
+    const matrix = computeWeeklyCapacityMatrix(withBacklog, weeks);
+    expect(matrix.get('p-alice')!.get('2026-02-16')!.weeklyPct).toBe(0);
+
+    // Now schedule Project B onto Monday Mar 09 for 15 working days (3 weeks)
+    const scheduled = scheduleProjectFromBacklog(withBacklog, 'proj-b', '2026-03-09', 15);
+    const bScheduled = scheduled.projects.find((p) => p.id === 'proj-b')!;
+    expect(bScheduled.status).toBe('planned');
+    expect(bScheduled.expected_start).toBe('2026-03-09');
+    expect(bScheduled.expected_end).toBe('2026-03-27'); // 3 working weeks
   });
 });
 

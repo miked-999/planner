@@ -1,4 +1,9 @@
-export type ProjectStatus = 'planned' | 'in_progress' | 'on_hold' | 'completed';
+export type ProjectStatus =
+  | 'backlog'
+  | 'planned'
+  | 'in_progress'
+  | 'on_hold'
+  | 'completed';
 export type PriorityLevel = 'low' | 'medium' | 'high';
 export type EntityType = 'project' | 'task';
 export type HealthStatus = 'green' | 'amber' | 'red' | 'blue' | 'grey';
@@ -22,9 +27,10 @@ export interface Project {
   id: string;
   name: string;
   description: string;
-  expected_start: string;
+  expected_start: string | null;
   actual_start: string | null;
-  expected_end: string;
+  expected_end: string | null;
+  estimated_days?: number | null;
   original_expected_end: string | null;
   required_by: string | null;
   actual_end: string | null;
@@ -42,9 +48,9 @@ export interface Task {
   project_id: string;
   name: string;
   description: string;
-  expected_start: string;
+  expected_start: string | null;
   actual_start: string | null;
-  expected_end: string;
+  expected_end: string | null;
   original_expected_end: string | null;
   required_by: string | null;
   actual_end: string | null;

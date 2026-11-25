@@ -10,7 +10,12 @@ import React, {
 import { computeWeeklyCapacityMatrix } from '../engine/capacity';
 import { addWorkingDays, generateWeeks, snapToWorkingDay, todayIsoLocal } from '../engine/dates';
 import { canAddDependency, previewDependencyCascade } from '../engine/dependencies';
-import { computeScheduleMetrics, recalculateProjectRollups } from '../engine/rollup';
+import {
+  computeScheduleMetrics,
+  recalculateProjectRollups,
+  scheduleProjectFromBacklog,
+  unscheduleProjectToBacklog,
+} from '../engine/rollup';
 import type {
   Assignment,
   CascadePreview,
@@ -114,7 +119,13 @@ interface PlanContextValue {
   clearAllPlanData: () => Promise<void>;
 
   // Entity helpers
-  createProject: (partial?: Partial<Project>) => Project;
+  createProject: (partial?: Partial<Project>, asBacklog?: boolean) => Project;
+  scheduleBacklogProject: (
+    projectId: string,
+    startIso: string,
+    estimatedDays?: number,
+  ) => void;
+  moveProjectToBacklog: (projectId: string) => void;
   duplicateProject: (projectId: string) => void;
   deleteProject: (projectId: string) => void;
   updateProject: (projectId: string, patch: Partial<Project>, checkCascade?: boolean) => void;
@@ -145,8 +156,16 @@ const PlanContext = createContext<PlanContextValue | null>(null);
 
 function countOverallocatedPeople(plan: PlanDocument, todayIso: string): number {
   if (plan.people.length === 0 || plan.projects.length === 0) return 0;
-  const starts = plan.projects.map((p) => p.expected_start).concat(todayIso).sort();
-  const ends = plan.projects.map((p) => p.expected_end).concat(todayIso).sort();
+  const starts = plan.projects
+    .map((p) => p.expected_start)
+    .filter((d): d is string => Boolean(d))
+    .concat(todayIso)
+    .sort();
+  const ends = plan.projects
+    .map((p) => p.expected_end)
+    .filter((d): d is string => Boolean(d))
+    .concat(todayIso)
+    .sort();
   const weeks = generateWeeks(starts[0], ends[ends.length - 1]);
   const matrix = computeWeeklyCapacityMatrix(plan, weeks);
   let count = 0;
@@ -438,23 +457,27 @@ export function PlanProvider({ children }: { children: React.ReactNode }) {
 
   // --- Entity helper actions ---
   const createProject = useCallback(
-    (partial?: Partial<Project>): Project => {
+    (partial?: Partial<Project>, asBacklog = false): Project => {
+      const isBacklog = asBacklog || partial?.status === 'backlog';
       const defaultStart = snapToWorkingDay(todayIso, 'forward');
-      const defaultEnd = addWorkingDays(defaultStart, 9); // 2 working weeks
+      const estDays = partial?.estimated_days ?? 10;
+      const defaultEnd = addWorkingDays(defaultStart, Math.max(1, estDays) - 1);
       const newProj: Project = {
         id: uid('proj'),
-        name: partial?.name?.trim() || 'New Project',
+        name: partial?.name?.trim() || (isBacklog ? 'New Backlog Item' : 'New Project'),
         description: partial?.description ?? '',
-        expected_start: partial?.expected_start ?? defaultStart,
+        expected_start: isBacklog ? null : (partial?.expected_start ?? defaultStart),
         actual_start: partial?.actual_start ?? null,
-        expected_end: partial?.expected_end ?? defaultEnd,
-        original_expected_end:
-          partial?.original_expected_end ?? partial?.expected_end ?? defaultEnd,
+        expected_end: isBacklog ? null : (partial?.expected_end ?? defaultEnd),
+        estimated_days: estDays,
+        original_expected_end: isBacklog
+          ? null
+          : (partial?.original_expected_end ?? partial?.expected_end ?? defaultEnd),
         required_by: partial?.required_by ?? null,
         actual_end: partial?.actual_end ?? null,
         percent_complete: partial?.percent_complete ?? 0,
         auto_progress: partial?.auto_progress ?? true,
-        status: partial?.status ?? 'planned',
+        status: isBacklog ? 'backlog' : (partial?.status ?? 'planned'),
         priority: partial?.priority ?? 'medium',
         color:
           partial?.color ??
@@ -470,6 +493,22 @@ export function PlanProvider({ children }: { children: React.ReactNode }) {
       return newProj;
     },
     [plan, todayIso, commitPlan],
+  );
+
+  const scheduleBacklogProject = useCallback(
+    (projectId: string, startIso: string, estimatedDays?: number) => {
+      const next = scheduleProjectFromBacklog(plan, projectId, startIso, estimatedDays);
+      const proj = next.projects.find((p) => p.id === projectId);
+      commitWithCascadeCheck(next, proj?.name ?? 'Scheduled project');
+    },
+    [plan, commitWithCascadeCheck],
+  );
+
+  const moveProjectToBacklog = useCallback(
+    (projectId: string) => {
+      commitPlan(unscheduleProjectToBacklog(plan, projectId));
+    },
+    [plan, commitPlan],
   );
 
   const duplicateProject = useCallback(
@@ -560,10 +599,43 @@ export function PlanProvider({ children }: { children: React.ReactNode }) {
     (projectId: string, patch: Partial<Project>, checkCascade = false) => {
       const existing = plan.projects.find((p) => p.id === projectId);
       if (!existing) return;
-      const merged: Project = { ...existing, ...patch };
-      if (merged.expected_end < merged.expected_start) {
-        merged.expected_end = merged.expected_start;
+
+      // If switching status to 'backlog' without explicitly supplying dates, unschedule cleanly
+      if (
+        patch.status === 'backlog' &&
+        patch.expected_start === undefined &&
+        patch.expected_end === undefined
+      ) {
+        commitPlan(unscheduleProjectToBacklog({ ...plan, projects: plan.projects.map((p) => (p.id === projectId ? { ...p, ...patch } : p)) }, projectId));
+        return;
       }
+
+      const merged: Project = { ...existing, ...patch };
+
+      // If user sets one date on an unscheduled project, derive the companion date automatically
+      if (merged.expected_start && !merged.expected_end) {
+        const est = Math.max(1, merged.estimated_days ?? 10);
+        merged.expected_end = addWorkingDays(
+          snapToWorkingDay(merged.expected_start, 'forward'),
+          est - 1,
+        );
+        if (merged.status === 'backlog') merged.status = 'planned';
+      } else if (!merged.expected_start && merged.expected_end) {
+        merged.expected_start = merged.expected_end;
+        if (merged.status === 'backlog') merged.status = 'planned';
+      }
+
+      // If user promotes status out of 'backlog' while dates are still null, keep null OR leave flexible;
+      // if both dates exist and end < start, clamp end >= start
+      if (merged.expected_start && merged.expected_end) {
+        if (merged.expected_end < merged.expected_start) {
+          merged.expected_end = merged.expected_start;
+        }
+        if (!merged.original_expected_end) {
+          merged.original_expected_end = merged.expected_end;
+        }
+      }
+
       const next: PlanDocument = {
         ...plan,
         projects: plan.projects.map((p) => (p.id === projectId ? merged : p)),
@@ -582,13 +654,28 @@ export function PlanProvider({ children }: { children: React.ReactNode }) {
       const proj = plan.projects.find((p) => p.id === projectId);
       if (!proj) return null;
       const siblings = plan.tasks.filter((t) => t.project_id === projectId);
-      const start =
-        siblings.length > 0
-          ? snapToWorkingDay(siblings[siblings.length - 1].expected_end, 'forward')
-          : proj.expected_start;
-      const taskStart =
-        siblings.length > 0 ? addWorkingDays(start, 1) : proj.expected_start;
-      const taskEnd = addWorkingDays(taskStart, 4);
+
+      const isUnscheduledProj = !proj.expected_start || !proj.expected_end;
+      let taskStart: string | null = null;
+      let taskEnd: string | null = null;
+
+      if (!isUnscheduledProj) {
+        const scheduledSiblings = siblings.filter(
+          (s): s is Task & { expected_end: string } => Boolean(s.expected_end),
+        );
+        const baseStart =
+          scheduledSiblings.length > 0
+            ? addWorkingDays(
+                snapToWorkingDay(
+                  scheduledSiblings[scheduledSiblings.length - 1].expected_end,
+                  'forward',
+                ),
+                1,
+              )
+            : proj.expected_start!;
+        taskStart = baseStart;
+        taskEnd = addWorkingDays(baseStart, 4);
+      }
 
       const newTask: Task = {
         id: uid('task'),
@@ -602,7 +689,7 @@ export function PlanProvider({ children }: { children: React.ReactNode }) {
         required_by: null,
         actual_end: null,
         percent_complete: 0,
-        status: 'planned',
+        status: isUnscheduledProj ? 'backlog' : 'planned',
         priority: proj.priority,
         notes: '',
         sort_order: siblings.length,
@@ -624,7 +711,21 @@ export function PlanProvider({ children }: { children: React.ReactNode }) {
       const existing = plan.tasks.find((t) => t.id === taskId);
       if (!existing) return;
       const merged: Task = { ...existing, ...patch };
-      if (merged.expected_end < merged.expected_start) {
+      if (merged.expected_start && !merged.expected_end) {
+        merged.expected_end = addWorkingDays(
+          snapToWorkingDay(merged.expected_start, 'forward'),
+          4,
+        );
+        if (merged.status === 'backlog') merged.status = 'planned';
+      } else if (!merged.expected_start && merged.expected_end) {
+        merged.expected_start = merged.expected_end;
+        if (merged.status === 'backlog') merged.status = 'planned';
+      }
+      if (
+        merged.expected_start &&
+        merged.expected_end &&
+        merged.expected_end < merged.expected_start
+      ) {
         merged.expected_end = merged.expected_start;
       }
       const next: PlanDocument = {
@@ -881,6 +982,8 @@ export function PlanProvider({ children }: { children: React.ReactNode }) {
       loadSamplePlan,
       clearAllPlanData,
       createProject,
+      scheduleBacklogProject,
+      moveProjectToBacklog,
       duplicateProject,
       deleteProject,
       updateProject,
@@ -930,6 +1033,8 @@ export function PlanProvider({ children }: { children: React.ReactNode }) {
       loadSamplePlan,
       clearAllPlanData,
       createProject,
+      scheduleBacklogProject,
+      moveProjectToBacklog,
       duplicateProject,
       deleteProject,
       updateProject,

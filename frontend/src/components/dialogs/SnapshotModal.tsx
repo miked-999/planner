@@ -49,12 +49,20 @@ export function SnapshotModal() {
       return { startIso: startMon, endIso: addCalendarDays(startMon, 12 * 7 - 3) };
     }
     if (preset === 'full' && plan.projects.length > 0) {
-      const starts = plan.projects.map((p) => p.expected_start).sort();
-      const ends = plan.projects.map((p) => p.expected_end).sort();
-      return {
-        startIso: mondayOfWeek(starts[0]),
-        endIso: ends[ends.length - 1],
-      };
+      const starts = plan.projects
+        .map((p) => p.expected_start)
+        .filter((d): d is string => Boolean(d))
+        .sort();
+      const ends = plan.projects
+        .map((p) => p.expected_end)
+        .filter((d): d is string => Boolean(d))
+        .sort();
+      if (starts.length > 0 && ends.length > 0) {
+        return {
+          startIso: mondayOfWeek(starts[0]),
+          endIso: ends[ends.length - 1],
+        };
+      }
     }
     return {
       startIso: customStart,

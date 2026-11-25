@@ -86,10 +86,14 @@ export function ProjectTableView() {
           cmp = PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority];
           break;
         case 'expected_start':
-          cmp = a.expected_start.localeCompare(b.expected_start);
+          cmp = (a.expected_start ?? '9999-99-99').localeCompare(
+            b.expected_start ?? '9999-99-99',
+          );
           break;
         case 'expected_end':
-          cmp = a.expected_end.localeCompare(b.expected_end);
+          cmp = (a.expected_end ?? '9999-99-99').localeCompare(
+            b.expected_end ?? '9999-99-99',
+          );
           break;
         case 'required_by':
           cmp = (a.required_by ?? '9999-99-99').localeCompare(
@@ -185,6 +189,7 @@ export function ProjectTableView() {
               }}
             >
               <option value="all">All Statuses</option>
+              <option value="backlog">Backlog (Unscheduled)</option>
               <option value="planned">Planned</option>
               <option value="in_progress">In Progress</option>
               <option value="on_hold">On Hold</option>
@@ -400,6 +405,7 @@ export function ProjectTableView() {
                             backgroundColor: 'var(--bg-subtle)',
                           }}
                         >
+                          <option value="backlog">Backlog</option>
                           <option value="planned">Planned</option>
                           <option value="in_progress">In Progress</option>
                           <option value="on_hold">On Hold</option>
@@ -445,8 +451,8 @@ export function ProjectTableView() {
                       ) : (
                         <input
                           type="date"
-                          disabled={hasTasks}
-                          value={proj.expected_start}
+                          disabled={hasTasks && Boolean(proj.expected_start)}
+                          value={proj.expected_start ?? ''}
                           onChange={(e) =>
                             e.target.value &&
                             updateProject(
@@ -474,9 +480,9 @@ export function ProjectTableView() {
                       ) : (
                         <input
                           type="date"
-                          disabled={hasTasks}
-                          min={proj.expected_start}
-                          value={proj.expected_end}
+                          disabled={hasTasks && Boolean(proj.expected_end)}
+                          min={proj.expected_start ?? undefined}
+                          value={proj.expected_end ?? ''}
                           onChange={(e) =>
                             e.target.value &&
                             updateProject(
@@ -534,17 +540,50 @@ export function ProjectTableView() {
                         color: 'var(--text-secondary)',
                       }}
                     >
-                      <span>{formatDurationLabel(metrics.durationWorkingDays)}</span>
-                      {metrics.slipDays !== null && metrics.slipDays !== 0 && (
-                        <span
-                          className={`ml-1.5 text-[11px] font-medium ${
-                            metrics.slipDays > 0
-                              ? 'text-amber-600 dark:text-amber-400'
-                              : 'text-emerald-600 dark:text-emerald-400'
-                          }`}
-                        >
-                          ({formatSignedWorkingDays(metrics.slipDays)} slip)
-                        </span>
+                      {!proj.expected_start || !proj.expected_end ? (
+                        isPresentationMode ? (
+                          <span>~{formatDurationLabel(proj.estimated_days ?? 10)} est.</span>
+                        ) : (
+                          <div className="inline-flex items-center gap-1">
+                            <span>~</span>
+                            <input
+                              type="number"
+                              min={1}
+                              max={500}
+                              value={proj.estimated_days ?? 10}
+                              onChange={(e) =>
+                                updateProject(proj.id, {
+                                  estimated_days: Math.max(
+                                    1,
+                                    Number(e.target.value) || 10,
+                                  ),
+                                })
+                              }
+                              aria-label={`Estimated working days for ${proj.name}`}
+                              className="w-13 px-1.5 py-0.5 rounded border text-right"
+                              style={{
+                                borderColor: 'var(--border-default)',
+                                backgroundColor: 'var(--bg-subtle)',
+                              }}
+                            />
+                            <span>wd est.</span>
+                          </div>
+                        )
+                      ) : (
+                        <>
+                          <span>{formatDurationLabel(metrics.durationWorkingDays)}</span>
+                          {metrics.slipDays !== null && metrics.slipDays !== 0 && (
+                            <span
+                              className={`ml-1.5 text-[11px] font-medium ${
+                                metrics.slipDays > 0
+                                  ? 'text-amber-600 dark:text-amber-400'
+                                  : 'text-emerald-600 dark:text-emerald-400'
+                              }`}
+                            >
+                              ({formatSignedWorkingDays(metrics.slipDays)} slip)
+                            </span>
+                          )}
+                        </>
                       )}
                     </td>
 
@@ -671,7 +710,8 @@ export function ProjectTableView() {
                                   backgroundColor: 'var(--bg-surface)',
                                 }}
                               >
-                                <option value="planned">Planned</option>
+                                <option value="backlog">Backlog</option>
+                          <option value="planned">Planned</option>
                                 <option value="in_progress">In Progress</option>
                                 <option value="on_hold">On Hold</option>
                                 <option value="completed">Completed</option>
@@ -716,7 +756,7 @@ export function ProjectTableView() {
                             ) : (
                               <input
                                 type="date"
-                                value={task.expected_start}
+                                value={task.expected_start ?? ''}
                                 onChange={(e) =>
                                   e.target.value &&
                                   updateTask(
@@ -744,8 +784,8 @@ export function ProjectTableView() {
                             ) : (
                               <input
                                 type="date"
-                                min={task.expected_start}
-                                value={task.expected_end}
+                                min={task.expected_start ?? undefined}
+                                value={task.expected_end ?? ''}
                                 onChange={(e) =>
                                   e.target.value &&
                                   updateTask(

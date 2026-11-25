@@ -1,8 +1,10 @@
 import { useState } from 'react';
 import {
   ArrowLeft,
+  CalendarPlus,
   Copy,
   GitBranch,
+  Inbox,
   Layers,
   Plus,
   RotateCcw,
@@ -13,11 +15,17 @@ import {
   Users,
   X,
 } from 'lucide-react';
-import { rankPeopleForSlot, resolveAssignmentWindow } from '../../engine/capacity';
+import {
+  computePersonAvailability,
+  rankPeopleForSlot,
+  resolveAssignmentWindow,
+} from '../../engine/capacity';
 import {
   formatDurationLabel,
   formatMediumDate,
+  formatShortDate,
   formatSignedWorkingDays,
+  snapToWorkingDay,
 } from '../../engine/dates';
 import { computeScheduleMetrics } from '../../engine/rollup';
 import { usePlan } from '../../store/PlanContext';
@@ -38,10 +46,13 @@ const COLOR_SWATCHES = [
 export function EntityDrawer() {
   const {
     plan,
+    todayIso,
     selectedEntity,
     setSelectedEntity,
     isPresentationMode,
     updateProject,
+    scheduleBacklogProject,
+    moveProjectToBacklog,
     duplicateProject,
     deleteProject,
     addTask,
@@ -63,6 +74,9 @@ export function EntityDrawer() {
   const [whoFitsOpenId, setWhoFitsOpenId] = useState<string | null>(null);
   const [depFromKey, setDepFromKey] = useState('');
   const [depError, setDepError] = useState<string | null>(null);
+  const [scheduleStartInput, setScheduleStartInput] = useState(() =>
+    snapToWorkingDay(todayIso, 'forward'),
+  );
 
   if (!selectedEntity || isPresentationMode) return null;
 
@@ -76,8 +90,12 @@ export function EntityDrawer() {
   if (isTaskMode && !activeTask) return null;
 
   const item = isTaskMode ? activeTask! : project;
+  const isItemUnscheduled = !item.expected_start || !item.expected_end;
   const projectTasks = plan.tasks.filter((t) => t.project_id === project.id);
-  const datesControlledByTasks = !isTaskMode && projectTasks.length > 0;
+  const scheduledTaskCount = projectTasks.filter(
+    (t) => t.expected_start && t.expected_end,
+  ).length;
+  const datesControlledByTasks = !isTaskMode && scheduledTaskCount > 0;
   const metrics = computeScheduleMetrics(item);
 
   const scopedAssignments = plan.assignments.filter((a) =>
@@ -85,6 +103,17 @@ export function EntityDrawer() {
       ? a.task_id === activeTask!.id
       : a.project_id === project.id && a.task_id === null,
   );
+
+  // Earliest team availability helper for unscheduled backlog items
+  const earliestTeamAvail = isItemUnscheduled
+    ? plan.people
+        .map((p) => ({
+          person: p,
+          avail: computePersonAvailability(plan, p.id, todayIso),
+        }))
+        .sort((a, b) => a.avail.availableDate.localeCompare(b.avail.availableDate))
+        .slice(0, 4)
+    : [];
 
   const currentType: EntityType = isTaskMode ? 'task' : 'project';
   const currentId = item.id;
@@ -171,7 +200,7 @@ export function EntityDrawer() {
               style={{ color: 'var(--text-secondary)' }}
             >
               <HealthDot health={metrics.health} />
-              Project Details
+              {isItemUnscheduled ? 'Backlog Item' : 'Project Details'}
             </span>
           )}
         </div>
@@ -237,6 +266,7 @@ export function EntityDrawer() {
                 backgroundColor: 'var(--bg-subtle)',
               }}
             >
+              <option value="backlog">Backlog (Unscheduled)</option>
               <option value="planned">Planned</option>
               <option value="in_progress">In Progress</option>
               <option value="on_hold">On Hold</option>
@@ -264,179 +294,358 @@ export function EntityDrawer() {
           </div>
         </div>
 
-        {/* Completion % */}
-        <div
-          className="p-3 rounded-lg border space-y-2"
-          style={{
-            borderColor: 'var(--border-default)',
-            backgroundColor: 'var(--bg-subtle)',
-          }}
-        >
-          <div className="flex items-center justify-between">
-            <span className="font-medium">Completion: {item.percent_complete}%</span>
-            {!isTaskMode && projectTasks.length > 0 && (
-              <label className="inline-flex items-center gap-1.5 cursor-pointer text-[11px]">
+        {/* Schedule Section — Unscheduled Backlog vs Scheduled */}
+        {isItemUnscheduled && !isTaskMode ? (
+          <div className="p-3.5 rounded-xl border border-purple-500/35 bg-purple-500/8 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-semibold text-purple-800 dark:text-purple-300 flex items-center gap-1.5">
+                <Inbox className="w-4 h-4" aria-hidden="true" />
+                Unscheduled Backlog Item
+              </span>
+              <span className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+                0% capacity impact
+              </span>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="block text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
+                Rough Estimated Duration (Working Days)
+              </label>
+              <div className="flex items-center gap-1.5">
                 <input
-                  type="checkbox"
-                  checked={project.auto_progress}
+                  type="number"
+                  min={1}
+                  max={500}
+                  value={project.estimated_days ?? 10}
                   onChange={(e) =>
-                    updateProject(project.id, { auto_progress: e.target.checked })
+                    updateProject(project.id, {
+                      estimated_days: Math.max(1, Number(e.target.value) || 10),
+                    })
                   }
+                  className="w-20 px-2 py-1 rounded border font-semibold"
+                  style={{
+                    borderColor: 'var(--border-default)',
+                    backgroundColor: 'var(--bg-surface)',
+                  }}
                 />
-                <span>Auto from phases</span>
-              </label>
-            )}
-          </div>
-          <input
-            type="range"
-            min={0}
-            max={100}
-            step={5}
-            disabled={!isTaskMode && projectTasks.length > 0 && project.auto_progress}
-            value={item.percent_complete}
-            onChange={(e) => handlePatch({ percent_complete: Number(e.target.value) })}
-            className="w-full"
-          />
-        </div>
-
-        {/* Schedule & Deadlines */}
-        <div className="space-y-2.5">
-          <div className="flex items-center justify-between">
-            <span
-              className="font-semibold uppercase tracking-wider text-[11px]"
-              style={{ color: 'var(--text-secondary)' }}
-            >
-              Schedule ({formatDurationLabel(metrics.durationWorkingDays)})
-            </span>
-            <HeadroomBadge headroomDays={metrics.headroomDays} />
-          </div>
-
-          {datesControlledByTasks && (
-            <p className="text-[11px] px-2.5 py-1.5 rounded bg-blue-500/10 text-blue-600 dark:text-blue-400">
-              Expected start &amp; end roll up automatically from this project&apos;s{' '}
-              {projectTasks.length} phases.
-            </p>
-          )}
-
-          <div className="grid grid-cols-2 gap-2.5">
-            <div>
-              <label className="block mb-1" style={{ color: 'var(--text-secondary)' }}>
-                Expected Start
-              </label>
-              <input
-                type="date"
-                disabled={datesControlledByTasks}
-                value={item.expected_start}
-                onChange={(e) =>
-                  e.target.value && handlePatch({ expected_start: e.target.value }, true)
-                }
-                className="w-full px-2 py-1.5 rounded border disabled:opacity-60"
-                style={{
-                  borderColor: 'var(--border-default)',
-                  backgroundColor: 'var(--bg-subtle)',
-                }}
-              />
+                <span className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+                  wd
+                </span>
+                <div className="flex items-center gap-1 ml-auto">
+                  {[
+                    [5, '1w'],
+                    [10, '2w'],
+                    [15, '3w'],
+                    [20, '4w'],
+                  ].map(([days, label]) => (
+                    <button
+                      key={label}
+                      type="button"
+                      onClick={() =>
+                        updateProject(project.id, { estimated_days: Number(days) })
+                      }
+                      className={`px-1.5 py-0.5 rounded text-[10px] border cursor-pointer ${
+                        (project.estimated_days ?? 10) === days
+                          ? 'bg-purple-600 text-white border-purple-600'
+                          : 'hover:bg-slate-500/10'
+                      }`}
+                      style={
+                        (project.estimated_days ?? 10) === days
+                          ? undefined
+                          : { borderColor: 'var(--border-default)' }
+                      }
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
 
             <div>
-              <label className="block mb-1" style={{ color: 'var(--text-secondary)' }}>
-                Expected End
+              <label className="block mb-1 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+                Optional Target / Required-by Deadline
               </label>
               <input
                 type="date"
-                disabled={datesControlledByTasks}
-                value={item.expected_end}
-                min={item.expected_start}
+                value={project.required_by ?? ''}
                 onChange={(e) =>
-                  e.target.value && handlePatch({ expected_end: e.target.value }, true)
+                  updateProject(project.id, { required_by: e.target.value || null })
                 }
-                className="w-full px-2 py-1.5 rounded border disabled:opacity-60"
-                style={{
-                  borderColor: 'var(--border-default)',
-                  backgroundColor: 'var(--bg-subtle)',
-                }}
-              />
-            </div>
-
-            <div>
-              <label className="block mb-1" style={{ color: 'var(--text-secondary)' }}>
-                Required-by Deadline
-              </label>
-              <input
-                type="date"
-                value={item.required_by ?? ''}
-                onChange={(e) => handlePatch({ required_by: e.target.value || null })}
                 className="w-full px-2 py-1.5 rounded border"
                 style={{
                   borderColor: 'var(--border-default)',
-                  backgroundColor: 'var(--bg-subtle)',
+                  backgroundColor: 'var(--bg-surface)',
                 }}
               />
             </div>
 
-            <div>
-              <label className="block mb-1" style={{ color: 'var(--text-secondary)' }}>
-                Actual Start / End
+            {/* Earliest team availability shortcuts */}
+            {earliestTeamAvail.length > 0 && (
+              <div className="space-y-1">
+                <div className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--text-secondary)' }}>
+                  Align Start with Next Available Person:
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {earliestTeamAvail.map(({ person, avail }) => (
+                    <button
+                      key={person.id}
+                      type="button"
+                      onClick={() => setScheduleStartInput(avail.availableDate)}
+                      className="px-2 py-0.5 rounded border text-[10px] hover:border-purple-500 cursor-pointer"
+                      style={{
+                        borderColor: 'var(--border-default)',
+                        backgroundColor: 'var(--bg-surface)',
+                      }}
+                    >
+                      {person.name.split(' ')[0]}:{' '}
+                      <strong>
+                        {avail.isAvailableNow
+                          ? 'Now'
+                          : formatShortDate(avail.availableDate)}
+                      </strong>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* One-click Schedule onto Timeline */}
+            <div className="pt-1 border-t border-purple-500/20 space-y-1.5">
+              <label className="block text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
+                Schedule onto Timeline Starting:
               </label>
-              <div className="flex gap-1">
+              <div className="flex gap-1.5">
                 <input
                   type="date"
-                  title="Actual Start"
-                  value={item.actual_start ?? ''}
-                  onChange={(e) => handlePatch({ actual_start: e.target.value || null })}
-                  className="w-1/2 px-1.5 py-1.5 rounded border text-[11px]"
+                  value={scheduleStartInput}
+                  onChange={(e) => setScheduleStartInput(e.target.value)}
+                  className="flex-1 px-2 py-1.5 rounded-lg border"
                   style={{
                     borderColor: 'var(--border-default)',
-                    backgroundColor: 'var(--bg-subtle)',
+                    backgroundColor: 'var(--bg-surface)',
                   }}
                 />
-                <input
-                  type="date"
-                  title="Actual End"
-                  value={item.actual_end ?? ''}
-                  onChange={(e) => handlePatch({ actual_end: e.target.value || null })}
-                  className="w-1/2 px-1.5 py-1.5 rounded border text-[11px]"
-                  style={{
-                    borderColor: 'var(--border-default)',
-                    backgroundColor: 'var(--bg-subtle)',
-                  }}
-                />
+                <button
+                  type="button"
+                  onClick={() =>
+                    scheduleStartInput &&
+                    scheduleBacklogProject(
+                      project.id,
+                      scheduleStartInput,
+                      project.estimated_days ?? 10,
+                    )
+                  }
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold cursor-pointer shrink-0"
+                >
+                  <CalendarPlus className="w-3.5 h-3.5" aria-hidden="true" />
+                  Schedule
+                </button>
               </div>
             </div>
           </div>
+        ) : (
+          <>
+            {/* Completion % */}
+            <div
+              className="p-3 rounded-lg border space-y-2"
+              style={{
+                borderColor: 'var(--border-default)',
+                backgroundColor: 'var(--bg-subtle)',
+              }}
+            >
+              <div className="flex items-center justify-between">
+                <span className="font-medium">Completion: {item.percent_complete}%</span>
+                {!isTaskMode && projectTasks.length > 0 && (
+                  <label className="inline-flex items-center gap-1.5 cursor-pointer text-[11px]">
+                    <input
+                      type="checkbox"
+                      checked={project.auto_progress}
+                      onChange={(e) =>
+                        updateProject(project.id, { auto_progress: e.target.checked })
+                      }
+                    />
+                    <span>Auto from phases</span>
+                  </label>
+                )}
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={5}
+                disabled={!isTaskMode && projectTasks.length > 0 && project.auto_progress}
+                value={item.percent_complete}
+                onChange={(e) => handlePatch({ percent_complete: Number(e.target.value) })}
+                className="w-full"
+              />
+            </div>
 
-          {/* Original Commitment Comparison */}
-          <div
-            className="flex items-center justify-between px-2.5 py-1.5 rounded border text-[11px]"
-            style={{ borderColor: 'var(--border-default)' }}
-          >
-            <span style={{ color: 'var(--text-secondary)' }}>
-              Original End: <strong>{formatMediumDate(item.original_expected_end)}</strong>
-              {metrics.slipDays !== null && metrics.slipDays !== 0 && (
+            {/* Schedule & Deadlines */}
+            <div className="space-y-2.5">
+              <div className="flex items-center justify-between">
                 <span
-                  className={`ml-1.5 font-semibold ${
-                    metrics.slipDays > 0
-                      ? 'text-amber-600 dark:text-amber-400'
-                      : 'text-emerald-600 dark:text-emerald-400'
-                  }`}
+                  className="font-semibold uppercase tracking-wider text-[11px]"
+                  style={{ color: 'var(--text-secondary)' }}
                 >
-                  ({formatSignedWorkingDays(metrics.slipDays)} slip)
+                  Schedule (
+                  {metrics.durationWorkingDays > 0
+                    ? formatDurationLabel(metrics.durationWorkingDays)
+                    : 'Unscheduled'}
+                  )
                 </span>
+                <div className="flex items-center gap-2">
+                  <HeadroomBadge headroomDays={metrics.headroomDays} />
+                  {!isTaskMode && (
+                    <button
+                      type="button"
+                      onClick={() => moveProjectToBacklog(project.id)}
+                      title="Clear dates and park in Unscheduled Backlog"
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] hover:bg-purple-500/12 text-purple-700 dark:text-purple-300 cursor-pointer"
+                      style={{ borderColor: 'var(--border-default)' }}
+                    >
+                      <Inbox className="w-3 h-3" aria-hidden="true" />
+                      To Backlog
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {datesControlledByTasks && (
+                <p className="text-[11px] px-2.5 py-1.5 rounded bg-blue-500/10 text-blue-600 dark:text-blue-400">
+                  Expected start &amp; end roll up automatically from this project&apos;s{' '}
+                  {scheduledTaskCount} scheduled phases.
+                </p>
               )}
-            </span>
-            {item.original_expected_end !== item.expected_end && (
-              <button
-                type="button"
-                onClick={() => handlePatch({ original_expected_end: item.expected_end })}
-                title="Reset original commitment to current expected end"
-                className="inline-flex items-center gap-1 text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
-              >
-                <RotateCcw className="w-3 h-3" aria-hidden="true" />
-                Reset
-              </button>
-            )}
-          </div>
-        </div>
+
+              <div className="grid grid-cols-2 gap-2.5">
+                <div>
+                  <label className="block mb-1" style={{ color: 'var(--text-secondary)' }}>
+                    Expected Start
+                  </label>
+                  <input
+                    type="date"
+                    disabled={datesControlledByTasks}
+                    value={item.expected_start ?? ''}
+                    onChange={(e) =>
+                      e.target.value &&
+                      handlePatch({ expected_start: e.target.value }, true)
+                    }
+                    className="w-full px-2 py-1.5 rounded border disabled:opacity-60"
+                    style={{
+                      borderColor: 'var(--border-default)',
+                      backgroundColor: 'var(--bg-subtle)',
+                    }}
+                  />
+                </div>
+
+                <div>
+                  <label className="block mb-1" style={{ color: 'var(--text-secondary)' }}>
+                    Expected End
+                  </label>
+                  <input
+                    type="date"
+                    disabled={datesControlledByTasks}
+                    value={item.expected_end ?? ''}
+                    min={item.expected_start ?? undefined}
+                    onChange={(e) =>
+                      e.target.value && handlePatch({ expected_end: e.target.value }, true)
+                    }
+                    className="w-full px-2 py-1.5 rounded border disabled:opacity-60"
+                    style={{
+                      borderColor: 'var(--border-default)',
+                      backgroundColor: 'var(--bg-subtle)',
+                    }}
+                  />
+                </div>
+
+                <div>
+                  <label className="block mb-1" style={{ color: 'var(--text-secondary)' }}>
+                    Required-by Deadline
+                  </label>
+                  <input
+                    type="date"
+                    value={item.required_by ?? ''}
+                    onChange={(e) => handlePatch({ required_by: e.target.value || null })}
+                    className="w-full px-2 py-1.5 rounded border"
+                    style={{
+                      borderColor: 'var(--border-default)',
+                      backgroundColor: 'var(--bg-subtle)',
+                    }}
+                  />
+                </div>
+
+                <div>
+                  <label className="block mb-1" style={{ color: 'var(--text-secondary)' }}>
+                    Actual Start / End
+                  </label>
+                  <div className="flex gap-1">
+                    <input
+                      type="date"
+                      title="Actual Start"
+                      value={item.actual_start ?? ''}
+                      onChange={(e) =>
+                        handlePatch({ actual_start: e.target.value || null })
+                      }
+                      className="w-1/2 px-1.5 py-1.5 rounded border text-[11px]"
+                      style={{
+                        borderColor: 'var(--border-default)',
+                        backgroundColor: 'var(--bg-subtle)',
+                      }}
+                    />
+                    <input
+                      type="date"
+                      title="Actual End"
+                      value={item.actual_end ?? ''}
+                      onChange={(e) => handlePatch({ actual_end: e.target.value || null })}
+                      className="w-1/2 px-1.5 py-1.5 rounded border text-[11px]"
+                      style={{
+                        borderColor: 'var(--border-default)',
+                        backgroundColor: 'var(--bg-subtle)',
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {item.expected_end && (
+                <div
+                  className="flex items-center justify-between px-2.5 py-1.5 rounded border text-[11px]"
+                  style={{ borderColor: 'var(--border-default)' }}
+                >
+                  <span style={{ color: 'var(--text-secondary)' }}>
+                    Original End:{' '}
+                    <strong>{formatMediumDate(item.original_expected_end)}</strong>
+                    {metrics.slipDays !== null && metrics.slipDays !== 0 && (
+                      <span
+                        className={`ml-1.5 font-semibold ${
+                          metrics.slipDays > 0
+                            ? 'text-amber-600 dark:text-amber-400'
+                            : 'text-emerald-600 dark:text-emerald-400'
+                        }`}
+                      >
+                        ({formatSignedWorkingDays(metrics.slipDays)} slip)
+                      </span>
+                    )}
+                  </span>
+                  {item.original_expected_end !== item.expected_end && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handlePatch({ original_expected_end: item.expected_end })
+                      }
+                      title="Reset original commitment to current expected end"
+                      className="inline-flex items-center gap-1 text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
+                    >
+                      <RotateCcw className="w-3 h-3" aria-hidden="true" />
+                      Reset
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          </>
+        )}
 
         {/* High-level Phases / Tasks */}
         {!isTaskMode && (
@@ -473,7 +682,9 @@ export function EntityDrawer() {
                     >
                       <div className="font-medium truncate hover:underline">{t.name}</div>
                       <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                        {t.percent_complete}% · {t.expected_start} → {t.expected_end}
+                        {t.expected_start && t.expected_end
+                          ? `${t.percent_complete}% · ${t.expected_start} → ${t.expected_end}`
+                          : 'Unscheduled phase'}
                       </div>
                     </button>
                     <button
@@ -564,9 +775,7 @@ export function EntityDrawer() {
                 return (
                   <div
                     key={asg.id}
-                    className={`p-2.5 space-y-2 ${
-                      isPlaceholder ? 'bg-amber-500/6' : ''
-                    }`}
+                    className={`p-2.5 space-y-2 ${isPlaceholder ? 'bg-amber-500/6' : ''}`}
                     style={{ borderColor: 'var(--border-default)' }}
                   >
                     <div className="flex items-center justify-between gap-2">
@@ -634,7 +843,6 @@ export function EntityDrawer() {
                       </div>
                     </div>
 
-                    {/* Dates + Who Fits Trigger */}
                     <div
                       className="flex items-center justify-between gap-1.5 text-[11px]"
                       style={{ color: 'var(--text-muted)' }}
@@ -689,7 +897,7 @@ export function EntityDrawer() {
                       )}
                     </div>
 
-                    {/* Ranked "Who fits?" Matcher Panel */}
+                    {/* Ranked "Who fits?" Matcher Panel (handles both scheduled & unscheduled backlog!) */}
                     {isPlaceholder && isWhoFitsOpen && (
                       <div
                         className="p-2 rounded-lg border space-y-1.5"
@@ -698,49 +906,95 @@ export function EntityDrawer() {
                           borderColor: 'var(--border-strong)',
                         }}
                       >
-                        <div
-                          className="text-[10px] font-semibold uppercase tracking-wider"
-                          style={{ color: 'var(--text-secondary)' }}
-                        >
-                          Best Capacity Matches ({asg.allocation_pct ?? 100}% needed)
-                        </div>
-                        {candidates.length === 0 ? (
-                          <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                            Add team members first to check capacity fit.
-                          </div>
-                        ) : (
-                          candidates.map((cand) => {
-                            const dotClass =
-                              cand.fitStatus === 'full'
-                                ? 'bg-emerald-500'
-                                : cand.fitStatus === 'partial'
-                                  ? 'bg-amber-400'
-                                  : 'bg-red-500';
-                            return (
+                        {win ? (
+                          <>
+                            <div
+                              className="text-[10px] font-semibold uppercase tracking-wider"
+                              style={{ color: 'var(--text-secondary)' }}
+                            >
+                              Best Capacity Matches ({asg.allocation_pct ?? 100}% needed)
+                            </div>
+                            {candidates.length === 0 ? (
                               <div
-                                key={cand.personId}
+                                className="text-[11px]"
+                                style={{ color: 'var(--text-muted)' }}
+                              >
+                                Add team members first to check capacity fit.
+                              </div>
+                            ) : (
+                              candidates.map((cand) => {
+                                const dotClass =
+                                  cand.fitStatus === 'full'
+                                    ? 'bg-emerald-500'
+                                    : cand.fitStatus === 'partial'
+                                      ? 'bg-amber-400'
+                                      : 'bg-red-500';
+                                return (
+                                  <div
+                                    key={cand.personId}
+                                    className="flex items-center justify-between gap-2 py-1 border-b last:border-b-0"
+                                    style={{ borderColor: 'var(--border-default)' }}
+                                  >
+                                    <div className="min-w-0">
+                                      <div className="flex items-center gap-1.5 font-medium">
+                                        <span
+                                          className={`w-2 h-2 rounded-full shrink-0 ${dotClass}`}
+                                        />
+                                        <span className="truncate">{cand.personName}</span>
+                                      </div>
+                                      <div
+                                        className="text-[10px] pl-3.5"
+                                        style={{ color: 'var(--text-secondary)' }}
+                                      >
+                                        {cand.avgFreePct}% avg free ·{' '}
+                                        {cand.peakWeeklyAfterPct}% peak wk after
+                                      </div>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        assignPersonToPlaceholder(asg.id, cand.personId);
+                                        setWhoFitsOpenId(null);
+                                      }}
+                                      className="inline-flex items-center gap-1 px-2 py-1 rounded bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-medium cursor-pointer shrink-0"
+                                    >
+                                      <UserCheck className="w-3 h-3" aria-hidden="true" />
+                                      Assign
+                                    </button>
+                                  </div>
+                                );
+                              })
+                            )}
+                          </>
+                        ) : (
+                          <>
+                            <div
+                              className="text-[10px] font-semibold uppercase tracking-wider"
+                              style={{ color: 'var(--text-secondary)' }}
+                            >
+                              Soonest Available People (Backlog Item)
+                            </div>
+                            {earliestTeamAvail.map(({ person: p, avail }) => (
+                              <div
+                                key={p.id}
                                 className="flex items-center justify-between gap-2 py-1 border-b last:border-b-0"
                                 style={{ borderColor: 'var(--border-default)' }}
                               >
                                 <div className="min-w-0">
-                                  <div className="flex items-center gap-1.5 font-medium">
-                                    <span
-                                      className={`w-2 h-2 rounded-full shrink-0 ${dotClass}`}
-                                    />
-                                    <span className="truncate">{cand.personName}</span>
-                                  </div>
+                                  <div className="font-medium truncate">{p.name}</div>
                                   <div
-                                    className="text-[10px] pl-3.5"
+                                    className="text-[10px]"
                                     style={{ color: 'var(--text-secondary)' }}
                                   >
-                                    {cand.avgFreePct}% avg free · {cand.peakWeeklyAfterPct}%
-                                    peak wk after
+                                    {avail.isAvailableNow
+                                      ? `Available now (${avail.freePct}% free)`
+                                      : `Free from ${formatShortDate(avail.availableDate)}`}
                                   </div>
                                 </div>
                                 <button
                                   type="button"
                                   onClick={() => {
-                                    assignPersonToPlaceholder(asg.id, cand.personId);
+                                    assignPersonToPlaceholder(asg.id, p.id);
                                     setWhoFitsOpenId(null);
                                   }}
                                   className="inline-flex items-center gap-1 px-2 py-1 rounded bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-medium cursor-pointer shrink-0"
@@ -749,8 +1003,8 @@ export function EntityDrawer() {
                                   Assign
                                 </button>
                               </div>
-                            );
-                          })
+                            ))}
+                          </>
                         )}
                       </div>
                     )}

@@ -29,6 +29,11 @@ export function HealthDot({
 }
 
 const STATUS_LABELS: Record<ProjectStatus, { text: string; classes: string }> = {
+  backlog: {
+    text: 'Backlog',
+    classes:
+      'bg-purple-500/12 text-purple-700 dark:text-purple-300 border-purple-500/25',
+  },
   planned: {
     text: 'Planned',
     classes: 'bg-blue-500/12 text-blue-600 dark:text-blue-400 border-blue-500/25',

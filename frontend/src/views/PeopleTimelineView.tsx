@@ -85,7 +85,9 @@ export function PeopleTimelineView() {
   const { timelineStart, weeks, totalWidth } = useMemo(() => {
     const allDates = [
       todayIso,
-      ...plan.projects.flatMap((p) => [p.expected_start, p.expected_end]),
+      ...plan.projects
+        .flatMap((p) => [p.expected_start, p.expected_end])
+        .filter((d): d is string => Boolean(d)),
       ...plan.unavailabilities.flatMap((u) => [u.start_date, u.end_date]),
     ].sort();
     const minIso = addCalendarDays(mondayOfWeek(allDates[0]), -14);

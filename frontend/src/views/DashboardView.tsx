@@ -4,6 +4,7 @@ import {
   CalendarCheck2,
   Clock,
   FolderKanban,
+  Inbox,
   Plus,
   Sparkles,
   UserCheck,
@@ -15,6 +16,7 @@ import {
 } from '../engine/capacity';
 import {
   addCalendarDays,
+  formatDurationLabel,
   formatShortDate,
   generateWeeks,
   mondayOfWeek,
@@ -22,7 +24,12 @@ import {
 import { findViolatedDependencyIds } from '../engine/dependencies';
 import { computeScheduleMetrics } from '../engine/rollup';
 import { usePlan } from '../store/PlanContext';
-import { HeadroomBadge, HealthDot, StatusPill } from '../components/ui/StatusBadges';
+import {
+  HeadroomBadge,
+  HealthDot,
+  PriorityBadge,
+  StatusPill,
+} from '../components/ui/StatusBadges';
 
 export function DashboardView() {
   const {
@@ -39,12 +46,18 @@ export function DashboardView() {
 
   const stats = useMemo(() => {
     const activeProjects = plan.projects.filter((p) => p.status === 'in_progress');
-    const upcomingProjects = plan.projects.filter((p) => p.status === 'planned');
+    const upcomingProjects = plan.projects.filter(
+      (p) => p.status === 'planned' && Boolean(p.expected_start),
+    );
+    const backlogProjects = plan.projects.filter(
+      (p) => !p.expected_start || !p.expected_end || p.status === 'backlog',
+    );
     const completingIn4Weeks = plan.projects.filter(
       (p) =>
         p.status !== 'completed' &&
-        p.expected_end >= todayIso &&
-        p.expected_end <= horizon4WeeksIso,
+        Boolean(p.expected_end) &&
+        p.expected_end! >= todayIso &&
+        p.expected_end! <= horizon4WeeksIso,
     );
     const lateProjects = plan.projects.filter(
       (p) => computeScheduleMetrics(p).isForecastLate,
@@ -94,7 +107,10 @@ export function DashboardView() {
     );
 
     const upcomingDeliveries = plan.projects
-      .filter((p) => p.status !== 'completed')
+      .filter(
+        (p): p is typeof p & { expected_end: string } =>
+          p.status !== 'completed' && Boolean(p.expected_end),
+      )
       .sort((a, b) => a.expected_end.localeCompare(b.expected_end))
       .slice(0, 6);
 
@@ -111,6 +127,7 @@ export function DashboardView() {
     return {
       activeProjects,
       upcomingProjects,
+      backlogProjects,
       completingIn4Weeks,
       lateProjects,
       overallocatedPeople,
@@ -302,6 +319,49 @@ export function DashboardView() {
               );
             })}
           </div>
+
+          {/* Unscheduled Backlog Queue */}
+          {stats.backlogProjects.length > 0 && (
+            <div
+              className="pt-3 border-t space-y-2"
+              style={{ borderColor: 'var(--border-default)' }}
+            >
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-purple-700 dark:text-purple-300 flex items-center gap-1.5">
+                  <Inbox className="w-3.5 h-3.5" aria-hidden="true" />
+                  Unscheduled Backlog ({stats.backlogProjects.length})
+                </span>
+              </div>
+              {stats.backlogProjects.slice(0, 4).map((bp) => (
+                <button
+                  key={bp.id}
+                  type="button"
+                  onClick={() => {
+                    if (!isPresentationMode) {
+                      setSelectedEntity({
+                        type: 'project',
+                        id: bp.id,
+                        projectId: bp.id,
+                      });
+                    }
+                    setActiveView('timeline');
+                  }}
+                  className="w-full p-2 rounded-lg border border-purple-500/25 bg-purple-500/6 flex items-center justify-between gap-2 text-left hover:bg-purple-500/12 cursor-pointer"
+                >
+                  <span className="font-medium truncate">{bp.name}</span>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <span
+                      className="text-[11px]"
+                      style={{ color: 'var(--text-secondary)' }}
+                    >
+                      ~{formatDurationLabel(bp.estimated_days ?? 10)}
+                    </span>
+                    <PriorityBadge priority={bp.priority} />
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
         </section>
 
         {/* Panel 2: Resource Availability */}

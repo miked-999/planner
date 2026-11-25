@@ -10,6 +10,7 @@ import {
   Eye,
   FlaskConical,
   GanttChart,
+  Inbox,
   LayoutDashboard,
   Moon,
   Plus,
@@ -132,6 +133,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   } = usePlan();
 
   const [collapsed, setCollapsed] = useState(false);
+  const backlogCount = plan.projects.filter(
+    (p) => !p.expected_start || !p.expected_end || p.status === 'backlog',
+  ).length;
 
   // Allow pressing Escape to exit Presentation Mode when no modal is open
   useEffect(() => {
@@ -233,7 +237,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   color: 'var(--text-secondary)',
                 }}
               >
-                {plan.projects.length} projects · {plan.people.length} people
+                {plan.projects.length} projects
+                {backlogCount > 0 ? ` (${backlogCount} backlog)` : ''} ·{' '}
+                {plan.people.length} people
               </span>
             </div>
 
@@ -341,7 +347,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <span className="hidden lg:inline">Snapshot</span>
             </button>
 
-            {/* New Project */}
+            {/* New Backlog Item + New Scheduled Project */}
+            <button
+              type="button"
+              onClick={() => createProject(undefined, true)}
+              title="Add an unscheduled project to the backlog (no dates required)"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-purple-500/35 bg-purple-500/10 hover:bg-purple-500/18 text-purple-700 dark:text-purple-300 transition-colors cursor-pointer"
+            >
+              <Inbox className="w-3.5 h-3.5" aria-hidden="true" />
+              <span className="hidden md:inline">+ Backlog</span>
+            </button>
+
             <button
               type="button"
               onClick={() => createProject()}

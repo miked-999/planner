@@ -50,9 +50,10 @@ CREATE TABLE IF NOT EXISTS projects (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
-    expected_start TEXT NOT NULL,
+    expected_start TEXT,
     actual_start TEXT,
-    expected_end TEXT NOT NULL,
+    expected_end TEXT,
+    estimated_days INTEGER DEFAULT 10,
     original_expected_end TEXT,
     required_by TEXT,
     actual_end TEXT,
@@ -70,9 +71,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
-    expected_start TEXT NOT NULL,
+    expected_start TEXT,
     actual_start TEXT,
-    expected_end TEXT NOT NULL,
+    expected_end TEXT,
     original_expected_end TEXT,
     required_by TEXT,
     actual_end TEXT,
@@ -125,9 +126,86 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
 def init_db(db_path: Path | None = None) -> None:
     conn = connect(db_path)
     try:
+        # Temporarily disable FK checks if table rebuilds are needed
+        conn.execute("PRAGMA foreign_keys=OFF;")
         with conn:
             conn.executescript(SCHEMA_SQL)
-            # Migrate older v1 assignments table (where person_id was NOT NULL or placeholder_label missing)
+
+            # v3 migration: nullable expected_start/expected_end + estimated_days on projects
+            p_cols = conn.execute("PRAGMA table_info(projects)").fetchall()
+            p_col_names = {r["name"] for r in p_cols}
+            p_start_col = next((r for r in p_cols if r["name"] == "expected_start"), None)
+            if p_cols and (
+                "estimated_days" not in p_col_names
+                or (p_start_col is not None and p_start_col["notnull"] == 1)
+            ):
+                est_expr = "estimated_days" if "estimated_days" in p_col_names else "10"
+                conn.executescript(
+                    f"""
+                    CREATE TABLE projects_v3 (
+                        id TEXT PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        description TEXT NOT NULL DEFAULT '',
+                        expected_start TEXT,
+                        actual_start TEXT,
+                        expected_end TEXT,
+                        estimated_days INTEGER DEFAULT 10,
+                        original_expected_end TEXT,
+                        required_by TEXT,
+                        actual_end TEXT,
+                        percent_complete INTEGER NOT NULL DEFAULT 0,
+                        auto_progress INTEGER NOT NULL DEFAULT 1,
+                        status TEXT NOT NULL DEFAULT 'planned',
+                        priority TEXT NOT NULL DEFAULT 'medium',
+                        color TEXT NOT NULL DEFAULT '#3b82f6',
+                        notes TEXT NOT NULL DEFAULT '',
+                        sort_order INTEGER NOT NULL DEFAULT 0
+                    );
+                    INSERT INTO projects_v3 (
+                        id, name, description, expected_start, actual_start, expected_end,
+                        estimated_days, original_expected_end, required_by, actual_end,
+                        percent_complete, auto_progress, status, priority, color, notes, sort_order
+                    )
+                    SELECT
+                        id, name, description, expected_start, actual_start, expected_end,
+                        {est_expr}, original_expected_end, required_by, actual_end,
+                        percent_complete, auto_progress, status, priority, color, notes, sort_order
+                    FROM projects;
+                    DROP TABLE projects;
+                    ALTER TABLE projects_v3 RENAME TO projects;
+                    """
+                )
+
+            # v3 migration: nullable expected_start/expected_end on tasks
+            t_cols = conn.execute("PRAGMA table_info(tasks)").fetchall()
+            t_start_col = next((r for r in t_cols if r["name"] == "expected_start"), None)
+            if t_cols and t_start_col is not None and t_start_col["notnull"] == 1:
+                conn.executescript(
+                    """
+                    CREATE TABLE tasks_v3 (
+                        id TEXT PRIMARY KEY,
+                        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                        name TEXT NOT NULL,
+                        description TEXT NOT NULL DEFAULT '',
+                        expected_start TEXT,
+                        actual_start TEXT,
+                        expected_end TEXT,
+                        original_expected_end TEXT,
+                        required_by TEXT,
+                        actual_end TEXT,
+                        percent_complete INTEGER NOT NULL DEFAULT 0,
+                        status TEXT NOT NULL DEFAULT 'planned',
+                        priority TEXT NOT NULL DEFAULT 'medium',
+                        notes TEXT NOT NULL DEFAULT '',
+                        sort_order INTEGER NOT NULL DEFAULT 0
+                    );
+                    INSERT INTO tasks_v3 SELECT * FROM tasks;
+                    DROP TABLE tasks;
+                    ALTER TABLE tasks_v3 RENAME TO tasks;
+                    """
+                )
+
+            # v2 migration: nullable person_id + placeholder_label on assignments
             cols = conn.execute("PRAGMA table_info(assignments)").fetchall()
             col_names = {row["name"] for row in cols}
             person_col = next((row for row in cols if row["name"] == "person_id"), None)
@@ -160,8 +238,9 @@ def init_db(db_path: Path | None = None) -> None:
                     """
                 )
             conn.execute(
-                "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '2')"
+                "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '3')"
             )
+        conn.execute("PRAGMA foreign_keys=ON;")
     finally:
         conn.close()
 
@@ -184,13 +263,25 @@ def read_plan(db_path: Path | None = None) -> PlanDocument:
                 }
             )
             for row in conn.execute(
-                "SELECT * FROM projects ORDER BY sort_order ASC, expected_start ASC, name ASC"
+                """
+                SELECT * FROM projects
+                ORDER BY sort_order ASC,
+                         CASE WHEN expected_start IS NULL THEN 1 ELSE 0 END ASC,
+                         expected_start ASC,
+                         name ASC
+                """
             )
         ]
         tasks = [
             Task(**dict(row))
             for row in conn.execute(
-                "SELECT * FROM tasks ORDER BY sort_order ASC, expected_start ASC, name ASC"
+                """
+                SELECT * FROM tasks
+                ORDER BY sort_order ASC,
+                         CASE WHEN expected_start IS NULL THEN 1 ELSE 0 END ASC,
+                         expected_start ASC,
+                         name ASC
+                """
             )
         ]
         assignments = [
@@ -240,9 +331,9 @@ def write_plan(plan: PlanDocument, db_path: Path | None = None) -> PlanDocument:
                 """
                 INSERT INTO projects (
                     id, name, description, expected_start, actual_start, expected_end,
-                    original_expected_end, required_by, actual_end, percent_complete,
-                    auto_progress, status, priority, color, notes, sort_order
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    estimated_days, original_expected_end, required_by, actual_end,
+                    percent_complete, auto_progress, status, priority, color, notes, sort_order
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -252,7 +343,9 @@ def write_plan(plan: PlanDocument, db_path: Path | None = None) -> PlanDocument:
                         p.expected_start,
                         p.actual_start,
                         p.expected_end,
-                        p.original_expected_end or p.expected_end,
+                        p.estimated_days,
+                        p.original_expected_end
+                        or (p.expected_end if p.expected_end else None),
                         p.required_by,
                         p.actual_end,
                         p.percent_complete,
@@ -283,7 +376,8 @@ def write_plan(plan: PlanDocument, db_path: Path | None = None) -> PlanDocument:
                         t.expected_start,
                         t.actual_start,
                         t.expected_end,
-                        t.original_expected_end or t.expected_end,
+                        t.original_expected_end
+                        or (t.expected_end if t.expected_end else None),
                         t.required_by,
                         t.actual_end,
                         t.percent_complete,

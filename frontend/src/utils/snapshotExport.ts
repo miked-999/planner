@@ -159,8 +159,14 @@ function renderRoadmapCanvas(
     assignees: string;
   }
 
+  const scheduledProjects = plan.projects.filter(
+    (p): p is typeof p & { expected_start: string; expected_end: string } =>
+      Boolean(p.expected_start && p.expected_end),
+  );
+  const backlogCount = plan.projects.length - scheduledProjects.length;
+
   const rows: SnapRow[] = [];
-  for (const p of plan.projects) {
+  for (const p of scheduledProjects) {
     const m = computeScheduleMetrics(p);
     const asgs = plan.assignments.filter((a) => a.project_id === p.id);
     const names = Array.from(
@@ -189,7 +195,10 @@ function renderRoadmapCanvas(
     });
 
     if (opts.includeTasks) {
-      const children = plan.tasks.filter((t) => t.project_id === p.id);
+      const children = plan.tasks.filter(
+        (t): t is typeof t & { expected_start: string; expected_end: string } =>
+          t.project_id === p.id && Boolean(t.expected_start && t.expected_end),
+      );
       for (const t of children) {
         const tm = computeScheduleMetrics(t);
         const tasgs = plan.assignments.filter((a) => a.task_id === t.id);
@@ -230,7 +239,9 @@ function renderRoadmapCanvas(
     ctx,
     totalW,
     opts.title || 'Project Roadmap',
-    `${formatMediumDate(rangeStart)} – ${formatMediumDate(rangeEnd)} · As of ${formatMediumDate(opts.todayIso)}`,
+    `${formatMediumDate(rangeStart)} – ${formatMediumDate(rangeEnd)} · As of ${formatMediumDate(opts.todayIso)}${
+      backlogCount > 0 ? ` · ${backlogCount} unscheduled in backlog` : ''
+    }`,
     [
       { color: '#10b981', label: 'On track' },
       { color: '#f59e0b', label: 'Required-by / Tight' },

@@ -98,6 +98,7 @@ def _build_csv_files(plan: PlanDocument) -> dict[str, str]:
             "expected_start",
             "actual_start",
             "expected_end",
+            "estimated_days",
             "original_expected_end",
             "required_by",
             "actual_end",
@@ -114,9 +115,10 @@ def _build_csv_files(plan: PlanDocument) -> dict[str, str]:
                 p.name,
                 p.status,
                 p.priority,
-                p.expected_start,
+                p.expected_start or "",
                 p.actual_start or "",
-                p.expected_end,
+                p.expected_end or "",
+                "" if p.estimated_days is None else p.estimated_days,
                 p.original_expected_end or "",
                 p.required_by or "",
                 p.actual_end or "",
@@ -158,9 +160,9 @@ def _build_csv_files(plan: PlanDocument) -> dict[str, str]:
                 t.name,
                 t.status,
                 t.priority,
-                t.expected_start,
+                t.expected_start or "",
                 t.actual_start or "",
-                t.expected_end,
+                t.expected_end or "",
                 t.original_expected_end or "",
                 t.required_by or "",
                 t.actual_end or "",
@@ -314,35 +316,39 @@ def import_projects_csv(req: CsvImportRequest) -> dict[str, Any]:
             continue
 
         try:
-            start_str = (
-                _parse_flexible_date(
-                    row.get("expected_start") or row.get("start") or row.get("start_date")
-                )
-                or date.today().isoformat()
+            start_str = _parse_flexible_date(
+                row.get("expected_start") or row.get("start") or row.get("start_date")
             )
-            end_str = (
-                _parse_flexible_date(
-                    row.get("expected_end") or row.get("end") or row.get("end_date")
-                )
-                or start_str
+            end_str = _parse_flexible_date(
+                row.get("expected_end") or row.get("end") or row.get("end_date")
             )
+            if start_str and not end_str:
+                end_str = start_str
+            elif end_str and not start_str:
+                start_str = end_str
             req_by = _parse_flexible_date(
                 row.get("required_by") or row.get("deadline") or row.get("due_date")
             )
             act_start = _parse_flexible_date(row.get("actual_start"))
             act_end = _parse_flexible_date(row.get("actual_end"))
-            orig_end = (
-                _parse_flexible_date(row.get("original_expected_end")) or end_str
-            )
+            orig_end = _parse_flexible_date(row.get("original_expected_end")) or end_str
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=f"Row {idx}: {exc}") from exc
 
-        status_raw = (row.get("status") or "planned").lower().replace(" ", "_")
+        is_unscheduled = start_str is None and end_str is None
+        default_status = "backlog" if is_unscheduled else "planned"
+        status_raw = (row.get("status") or default_status).lower().replace(" ", "_")
         status = (
             status_raw
-            if status_raw in {"planned", "in_progress", "on_hold", "completed"}
-            else "planned"
+            if status_raw in {"backlog", "planned", "in_progress", "on_hold", "completed"}
+            else default_status
         )
+
+        est_raw = row.get("estimated_days") or row.get("duration") or "10"
+        try:
+            est_days = max(1, min(500, int(float(est_raw))))
+        except ValueError:
+            est_days = 10
 
         priority_raw = (row.get("priority") or "medium").lower()
         priority = priority_raw if priority_raw in {"low", "medium", "high"} else "medium"
@@ -373,6 +379,7 @@ def import_projects_csv(req: CsvImportRequest) -> dict[str, Any]:
                 expected_start=start_str,
                 actual_start=act_start,
                 expected_end=end_str,
+                estimated_days=est_days,
                 original_expected_end=orig_end,
                 required_by=req_by,
                 actual_end=act_end,

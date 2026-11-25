@@ -128,10 +128,14 @@ function getEntityDates(
 ): { start: string; end: string } | null {
   if (type === 'project') {
     const p = plan.projects.find((x) => x.id === id);
-    return p ? { start: p.expected_start, end: p.expected_end } : null;
+    return p && p.expected_start && p.expected_end
+      ? { start: p.expected_start, end: p.expected_end }
+      : null;
   }
   const t = plan.tasks.find((x) => x.id === id);
-  return t ? { start: t.expected_start, end: t.expected_end } : null;
+  return t && t.expected_start && t.expected_end
+    ? { start: t.expected_start, end: t.expected_end }
+    : null;
 }
 
 export function findViolatedDependencyIds(plan: PlanDocument): Set<string> {
@@ -196,7 +200,15 @@ export function previewDependencyCascade(
 
   for (const afterProj of proposedPlan.projects) {
     const directProj = directProjMap.get(afterProj.id);
-    if (!directProj) continue;
+    if (
+      !directProj ||
+      !directProj.expected_start ||
+      !directProj.expected_end ||
+      !afterProj.expected_start ||
+      !afterProj.expected_end
+    ) {
+      continue;
+    }
     if (
       directProj.expected_start !== afterProj.expected_start ||
       directProj.expected_end !== afterProj.expected_end
@@ -230,7 +242,15 @@ export function previewDependencyCascade(
 
   for (const afterTask of proposedPlan.tasks) {
     const directTask = directTaskMap.get(afterTask.id);
-    if (!directTask) continue;
+    if (
+      !directTask ||
+      !directTask.expected_start ||
+      !directTask.expected_end ||
+      !afterTask.expected_start ||
+      !afterTask.expected_end
+    ) {
+      continue;
+    }
     if (
       directTask.expected_start !== afterTask.expected_start ||
       directTask.expected_end !== afterTask.expected_end
@@ -268,12 +288,16 @@ export function previewDependencyCascade(
     ...beforePlan.projects.map((p) => p.expected_start),
     ...proposedPlan.projects.map((p) => p.expected_start),
     todayIso,
-  ].sort();
+  ]
+    .filter((d): d is string => Boolean(d))
+    .sort();
   const allEnds = [
     ...beforePlan.projects.map((p) => p.expected_end),
     ...proposedPlan.projects.map((p) => p.expected_end),
     todayIso,
-  ].sort();
+  ]
+    .filter((d): d is string => Boolean(d))
+    .sort();
 
   const weeks = generateWeeks(allStarts[0], allEnds[allEnds.length - 1]);
   const beforeCap = computeWeeklyCapacityMatrix(beforePlan, weeks);

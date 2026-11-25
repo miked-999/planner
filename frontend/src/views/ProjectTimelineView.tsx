@@ -1,11 +1,14 @@
 import React, { useMemo, useRef, useState } from 'react';
 import {
+  CalendarPlus,
   ChevronDown,
   ChevronRight,
   Crosshair,
   Diamond,
   Filter,
   GitBranch,
+  GripVertical,
+  Inbox,
   Plus,
   Sparkles,
   ZoomIn,
@@ -15,9 +18,11 @@ import {
   addCalendarDays,
   addWorkingDays,
   calendarDaysBetween,
+  formatDurationLabel,
   formatShortDate,
   generateWeeks,
   mondayOfWeek,
+  snapToWorkingDay,
 } from '../engine/dates';
 import { findViolatedDependencyIds } from '../engine/dependencies';
 import {
@@ -27,7 +32,7 @@ import {
 } from '../engine/rollup';
 import { usePlan } from '../store/PlanContext';
 import type { EntityType, Project, ProjectStatus, Task } from '../types/plan';
-import { HealthDot, StatusPill } from '../components/ui/StatusBadges';
+import { HealthDot, PriorityBadge, StatusPill } from '../components/ui/StatusBadges';
 
 type ZoomMode = 'compact' | 'standard' | 'detailed';
 
@@ -81,6 +86,7 @@ export function ProjectTimelineView() {
     setSelectedEntity,
     commitWithCascadeCheck,
     createProject,
+    scheduleBacklogProject,
     addTask,
     addDependency,
     loadSamplePlan,
@@ -91,6 +97,8 @@ export function ProjectTimelineView() {
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [personFilter, setPersonFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [backlogTrayOpen, setBacklogTrayOpen] = useState(true);
+  const [dropHoverWeek, setDropHoverWeek] = useState<string | null>(null);
   const [linkingFrom, setLinkingFrom] = useState<{
     type: EntityType;
     id: string;
@@ -107,11 +115,31 @@ export function ProjectTimelineView() {
     [plan.people],
   );
 
+  // Separate unscheduled backlog projects from scheduled Gantt rows
+  const backlogProjects = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return plan.projects.filter((p) => {
+      const isUnscheduled = !p.expected_start || !p.expected_end;
+      if (!isUnscheduled) return false;
+      if (q && !p.name.toLowerCase().includes(q)) return false;
+      if (personFilter !== 'all') {
+        const asgs = plan.assignments.filter((a) => a.project_id === p.id);
+        if (personFilter === '__tbd__') {
+          if (!asgs.some((a) => !a.person_id)) return false;
+        } else if (!asgs.some((a) => a.person_id === personFilter)) {
+          return false;
+        }
+      }
+      return true;
+    });
+  }, [plan.projects, plan.assignments, searchQuery, personFilter]);
+
   const rows = useMemo<TimelineRow[]>(() => {
     const q = searchQuery.trim().toLowerCase();
     const out: TimelineRow[] = [];
 
     for (const proj of plan.projects) {
+      if (!proj.expected_start || !proj.expected_end) continue;
       if (statusFilter !== 'all' && proj.status !== statusFilter) continue;
 
       const projAssignments = plan.assignments.filter((a) => a.project_id === proj.id);
@@ -125,6 +153,10 @@ export function ProjectTimelineView() {
       }
 
       const childTasks = plan.tasks.filter((t) => t.project_id === proj.id);
+      const scheduledTasks = childTasks.filter(
+        (t): t is Task & { expected_start: string; expected_end: string } =>
+          Boolean(t.expected_start && t.expected_end),
+      );
       const matchesSearch =
         !q ||
         proj.name.toLowerCase().includes(q) ||
@@ -158,7 +190,7 @@ export function ProjectTimelineView() {
         requiredBy: proj.required_by,
         percentComplete: proj.percent_complete,
         status: proj.status,
-        hasChildren: childTasks.length > 0,
+        hasChildren: scheduledTasks.length > 0,
         isExpanded,
         assigneeNames: projPeople,
         tbdCount: projTbdCount,
@@ -166,7 +198,7 @@ export function ProjectTimelineView() {
       });
 
       if (isExpanded) {
-        for (const task of childTasks) {
+        for (const task of scheduledTasks) {
           const taskAsgs = plan.assignments.filter((a) => a.task_id === task.id);
           const taskPeople = Array.from(
             new Set(
@@ -216,11 +248,9 @@ export function ProjectTimelineView() {
   const { timelineStart, weeks, totalWidth } = useMemo(() => {
     const allDates = [
       todayIso,
-      ...plan.projects.flatMap((p) => [
-        p.expected_start,
-        p.expected_end,
-        ...(p.required_by ? [p.required_by] : []),
-      ]),
+      ...plan.projects
+        .flatMap((p) => [p.expected_start, p.expected_end, p.required_by])
+        .filter((d): d is string => Boolean(d)),
     ].sort();
     const minIso = addCalendarDays(mondayOfWeek(allDates[0]), -14);
     const maxIso = addCalendarDays(mondayOfWeek(allDates[allDates.length - 1]), 49);
@@ -361,18 +391,26 @@ export function ProjectTimelineView() {
         <div className="max-w-md space-y-4">
           <h2 className="text-lg font-semibold">Start Your Team&apos;s Project Plan</h2>
           <p className="text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-            Create high-level projects, assign team members or TBD slots, visualise capacity
-            conflicts, and preview knock-on dependency shifts alongside Jira.
+            Create scheduled projects or capture unscheduled backlog ideas (no dates or
+            people required yet), then drag them onto the timeline when capacity opens up.
           </p>
           {!isPresentationMode && (
-            <div className="flex items-center justify-center gap-3 pt-2">
+            <div className="flex flex-wrap items-center justify-center gap-2.5 pt-2">
               <button
                 type="button"
                 onClick={() => createProject()}
                 className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer"
               >
                 <Plus className="w-4 h-4" aria-hidden="true" />
-                Create First Project
+                Create Project
+              </button>
+              <button
+                type="button"
+                onClick={() => createProject(undefined, true)}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg border border-purple-500/40 bg-purple-500/10 text-purple-700 dark:text-purple-300 text-xs font-semibold cursor-pointer"
+              >
+                <Inbox className="w-4 h-4" aria-hidden="true" />
+                Add Backlog Item
               </button>
               <button
                 type="button"
@@ -391,6 +429,9 @@ export function ProjectTimelineView() {
   }
 
   const todayX = dateToX(todayIso) + dayPx * 0.5;
+  const totalUnscheduledCount = plan.projects.filter(
+    (p) => !p.expected_start || !p.expected_end,
+  ).length;
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
@@ -443,65 +484,85 @@ export function ProjectTimelineView() {
           </div>
 
           {!isPresentationMode && (
-            <div className="flex items-center gap-1.5 ml-1">
-              <Filter
-                className="w-3.5 h-3.5"
-                style={{ color: 'var(--text-muted)' }}
-                aria-hidden="true"
-              />
-              <input
-                type="search"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Filter projects…"
-                aria-label="Filter projects by name"
-                className="px-2.5 py-1 rounded-md border w-36"
-                style={{
-                  borderColor: 'var(--border-default)',
-                  backgroundColor: 'var(--bg-subtle)',
-                }}
-              />
-              <select
-                value={personFilter}
-                onChange={(e) => setPersonFilter(e.target.value)}
-                aria-label="Filter by person"
-                className="px-2 py-1 rounded-md border"
-                style={{
-                  borderColor: 'var(--border-default)',
-                  backgroundColor: 'var(--bg-subtle)',
-                }}
+            <>
+              <button
+                type="button"
+                onClick={() => setBacklogTrayOpen((o) => !o)}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border font-medium cursor-pointer transition-colors ${
+                  backlogTrayOpen && totalUnscheduledCount > 0
+                    ? 'border-purple-500/50 bg-purple-500/12 text-purple-700 dark:text-purple-300'
+                    : 'hover:bg-slate-500/10'
+                }`}
+                style={
+                  backlogTrayOpen && totalUnscheduledCount > 0
+                    ? undefined
+                    : { borderColor: 'var(--border-default)' }
+                }
               >
-                <option value="all">All People</option>
-                <option value="__tbd__">Has Unassigned (TBD)</option>
-                {plan.people.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-              <select
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
-                aria-label="Filter by status"
-                className="px-2 py-1 rounded-md border"
-                style={{
-                  borderColor: 'var(--border-default)',
-                  backgroundColor: 'var(--bg-subtle)',
-                }}
-              >
-                <option value="all">All Statuses</option>
-                <option value="planned">Planned</option>
-                <option value="in_progress">In Progress</option>
-                <option value="on_hold">On Hold</option>
-                <option value="completed">Completed</option>
-              </select>
-            </div>
+                <Inbox className="w-3.5 h-3.5 text-purple-500" aria-hidden="true" />
+                <span>Backlog ({totalUnscheduledCount})</span>
+              </button>
+
+              <div className="flex items-center gap-1.5 ml-1">
+                <Filter
+                  className="w-3.5 h-3.5"
+                  style={{ color: 'var(--text-muted)' }}
+                  aria-hidden="true"
+                />
+                <input
+                  type="search"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Filter projects…"
+                  aria-label="Filter projects by name"
+                  className="px-2.5 py-1 rounded-md border w-36"
+                  style={{
+                    borderColor: 'var(--border-default)',
+                    backgroundColor: 'var(--bg-subtle)',
+                  }}
+                />
+                <select
+                  value={personFilter}
+                  onChange={(e) => setPersonFilter(e.target.value)}
+                  aria-label="Filter by person"
+                  className="px-2 py-1 rounded-md border"
+                  style={{
+                    borderColor: 'var(--border-default)',
+                    backgroundColor: 'var(--bg-subtle)',
+                  }}
+                >
+                  <option value="all">All People</option>
+                  <option value="__tbd__">Has Unassigned (TBD)</option>
+                  {plan.people.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value)}
+                  aria-label="Filter by status"
+                  className="px-2 py-1 rounded-md border"
+                  style={{
+                    borderColor: 'var(--border-default)',
+                    backgroundColor: 'var(--bg-subtle)',
+                  }}
+                >
+                  <option value="all">All Scheduled</option>
+                  <option value="planned">Planned</option>
+                  <option value="in_progress">In Progress</option>
+                  <option value="on_hold">On Hold</option>
+                  <option value="completed">Completed</option>
+                </select>
+              </div>
+            </>
           )}
         </div>
 
         {/* Legend */}
         <div
-          className="hidden lg:flex items-center gap-3 text-[11px]"
+          className="hidden xl:flex items-center gap-3 text-[11px]"
           style={{ color: 'var(--text-secondary)' }}
         >
           <span className="inline-flex items-center gap-1">
@@ -524,6 +585,104 @@ export function ProjectTimelineView() {
           </span>
         </div>
       </div>
+
+      {/* Collapsible Unscheduled Backlog Tray */}
+      {!isPresentationMode && backlogTrayOpen && backlogProjects.length > 0 && (
+        <div
+          className="px-4 py-2.5 border-b bg-purple-500/6 space-y-2 text-xs print:hidden"
+          style={{ borderColor: 'var(--border-default)' }}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-semibold text-purple-800 dark:text-purple-300 flex items-center gap-1.5">
+              <Inbox className="w-3.5 h-3.5" aria-hidden="true" />
+              Unscheduled Backlog ({backlogProjects.length}) — drag any card onto a week
+              column below to schedule, or click to inspect
+            </span>
+            <button
+              type="button"
+              onClick={() => createProject(undefined, true)}
+              className="inline-flex items-center gap-1 text-[11px] font-medium text-purple-700 dark:text-purple-300 hover:underline cursor-pointer"
+            >
+              <Plus className="w-3 h-3" aria-hidden="true" />
+              Add backlog item
+            </button>
+          </div>
+
+          <div className="flex items-center gap-2 overflow-x-auto pb-0.5">
+            {backlogProjects.map((bp) => {
+              const bpAsgs = plan.assignments.filter((a) => a.project_id === bp.id);
+              const isSel =
+                selectedEntity?.type === 'project' && selectedEntity.id === bp.id;
+              return (
+                <div
+                  key={bp.id}
+                  draggable
+                  onDragStart={(e) => {
+                    e.dataTransfer.setData('text/backlog-project-id', bp.id);
+                    e.dataTransfer.effectAllowed = 'move';
+                  }}
+                  onClick={() =>
+                    setSelectedEntity({
+                      type: 'project',
+                      id: bp.id,
+                      projectId: bp.id,
+                    })
+                  }
+                  className={`shrink-0 w-68 p-2 rounded-lg border flex items-center justify-between gap-2 cursor-grab active:cursor-grabbing transition-shadow ${
+                    isSel ? 'ring-2 ring-purple-500' : 'hover:border-purple-500/50'
+                  }`}
+                  style={{
+                    backgroundColor: 'var(--bg-surface)',
+                    borderColor: 'var(--border-default)',
+                  }}
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <GripVertical
+                      className="w-3.5 h-3.5 shrink-0 opacity-45"
+                      aria-hidden="true"
+                    />
+                    <span
+                      className="w-2.5 h-2.5 rounded-full shrink-0"
+                      style={{ backgroundColor: bp.color }}
+                    />
+                    <div className="min-w-0">
+                      <div className="font-semibold truncate">{bp.name}</div>
+                      <div
+                        className="flex items-center gap-1.5 text-[10px]"
+                        style={{ color: 'var(--text-secondary)' }}
+                      >
+                        <PriorityBadge priority={bp.priority} />
+                        <span>~{formatDurationLabel(bp.estimated_days ?? 10)}</span>
+                        {bpAsgs.length === 0 ? (
+                          <span className="italic opacity-75">Unassigned</span>
+                        ) : (
+                          <span>{bpAsgs.length} role(s)</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      scheduleBacklogProject(
+                        bp.id,
+                        snapToWorkingDay(todayIso, 'forward'),
+                        bp.estimated_days ?? 10,
+                      );
+                    }}
+                    title="Schedule starting this week"
+                    className="p-1.5 rounded-md bg-purple-500/12 hover:bg-purple-500/22 text-purple-700 dark:text-purple-300 cursor-pointer shrink-0"
+                  >
+                    <CalendarPlus className="w-3.5 h-3.5" aria-hidden="true" />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Interactive Dependency Linking Banner */}
       {!isPresentationMode && (linkingFrom || linkBannerError) && (
@@ -608,18 +767,38 @@ export function ProjectTimelineView() {
                 {weeks.map((w) => {
                   const isCurrentWeek =
                     todayIso >= w.weekStart && todayIso <= w.sundayEnd;
+                  const isDropTarget = dropHoverWeek === w.weekStart;
                   return (
                     <div
                       key={w.weekStart}
+                      onDragOver={(e) => {
+                        if (e.dataTransfer.types.includes('text/backlog-project-id')) {
+                          e.preventDefault();
+                          setDropHoverWeek(w.weekStart);
+                        }
+                      }}
+                      onDragLeave={() => {
+                        if (dropHoverWeek === w.weekStart) setDropHoverWeek(null);
+                      }}
+                      onDrop={(e) => {
+                        const pid = e.dataTransfer.getData('text/backlog-project-id');
+                        setDropHoverWeek(null);
+                        if (pid) {
+                          e.preventDefault();
+                          scheduleBacklogProject(pid, w.weekStart);
+                        }
+                      }}
                       style={{
                         width: 7 * dayPx,
                         borderColor: 'var(--border-default)',
                       }}
-                      title={w.shortRange}
-                      className={`px-1.5 py-1 border-r flex items-center justify-between ${
-                        isCurrentWeek
-                          ? 'bg-blue-500/10 font-semibold text-blue-600 dark:text-blue-400'
-                          : ''
+                      title={`${w.shortRange} (Drop backlog item here to schedule)`}
+                      className={`px-1.5 py-1 border-r flex items-center justify-between transition-colors ${
+                        isDropTarget
+                          ? 'bg-purple-500/25 text-purple-800 dark:text-purple-200 font-bold'
+                          : isCurrentWeek
+                            ? 'bg-blue-500/10 font-semibold text-blue-600 dark:text-blue-400'
+                            : ''
                       }`}
                     >
                       <span>{w.weekLabel}</span>
@@ -757,7 +936,6 @@ export function ProjectTimelineView() {
                     isSelected ? 'bg-blue-500/8' : 'hover:bg-slate-500/4'
                   }`}
                 >
-                  {/* Sticky Left Tree Cell */}
                   <div
                     style={{
                       width: SIDEBAR_COL_WIDTH,
@@ -886,23 +1064,46 @@ export function ProjectTimelineView() {
                     )}
                   </div>
 
-                  {/* Timeline Row Canvas */}
+                  {/* Timeline Row Canvas (also accepts dropping a backlog card onto any week!) */}
                   <div
                     className="relative"
                     style={{ width: totalWidth, height: ROW_HEIGHT }}
                   >
-                    <div className="absolute inset-0 flex pointer-events-none">
+                    <div className="absolute inset-0 flex">
                       {weeks.map((w) => (
                         <div
                           key={w.weekStart}
+                          onDragOver={(e) => {
+                            if (
+                              e.dataTransfer.types.includes('text/backlog-project-id')
+                            ) {
+                              e.preventDefault();
+                              setDropHoverWeek(w.weekStart);
+                            }
+                          }}
+                          onDragLeave={() => {
+                            if (dropHoverWeek === w.weekStart) setDropHoverWeek(null);
+                          }}
+                          onDrop={(e) => {
+                            const pid = e.dataTransfer.getData(
+                              'text/backlog-project-id',
+                            );
+                            setDropHoverWeek(null);
+                            if (pid) {
+                              e.preventDefault();
+                              scheduleBacklogProject(pid, w.weekStart);
+                            }
+                          }}
                           style={{
                             width: 7 * dayPx,
                             borderColor: 'var(--border-default)',
                           }}
-                          className="h-full border-r relative"
+                          className={`h-full border-r relative ${
+                            dropHoverWeek === w.weekStart ? 'bg-purple-500/12' : ''
+                          }`}
                         >
                           <div
-                            className="absolute top-0 bottom-0 right-0 bg-slate-500/6"
+                            className="absolute top-0 bottom-0 right-0 bg-slate-500/6 pointer-events-none"
                             style={{ width: 2 * dayPx }}
                           />
                         </div>
@@ -912,7 +1113,7 @@ export function ProjectTimelineView() {
                     {origEndX !== null && (
                       <div
                         title={`Original expected end: ${formatShortDate(row.originalExpectedEnd)}`}
-                        className="absolute top-2 bottom-2 w-0.5 border-l border-dashed border-slate-400 z-10"
+                        className="absolute top-2 bottom-2 w-0.5 border-l border-dashed border-slate-400 z-10 pointer-events-none"
                         style={{ left: origEndX }}
                       />
                     )}
@@ -920,7 +1121,7 @@ export function ProjectTimelineView() {
                     {reqByX !== null && (
                       <div
                         title={`Required by: ${formatShortDate(row.requiredBy)}`}
-                        className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 z-20"
+                        className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 z-20 pointer-events-none"
                         style={{ left: reqByX }}
                       >
                         <Diamond
@@ -1046,9 +1247,11 @@ export function ProjectTimelineView() {
 
             {rows.length === 0 && (
               <div className="p-8 text-center text-xs" style={{ color: 'var(--text-muted)' }}>
-                No projects match the active filter criteria.
+                {backlogProjects.length > 0
+                  ? 'All matching projects are currently in the Unscheduled Backlog tray above — drag one onto a week column to schedule it.'
+                  : 'No scheduled projects match the active filter criteria.'}
                 <div className="mt-2">
-                  <StatusPill status="planned" />
+                  <StatusPill status="backlog" />
                 </div>
               </div>
             )}

@@ -20,13 +20,18 @@ export function resolveAssignmentWindow(
   if (!target) return null;
   const start = assignment.start_date ?? target.expected_start;
   const end = assignment.end_date ?? target.expected_end;
+  if (!start || !end) return null;
   if (end < start) return { start, end: start };
   return { start, end };
 }
 
 export function isItemActiveForCapacity(item: Project | Task | undefined): boolean {
   if (!item) return false;
-  return item.status !== 'completed' && item.status !== 'on_hold';
+  return (
+    item.status !== 'completed' &&
+    item.status !== 'on_hold' &&
+    item.status !== 'backlog'
+  );
 }
 
 export interface DailyAllocationResult {
