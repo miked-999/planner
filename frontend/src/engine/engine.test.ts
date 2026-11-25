@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { PlanDocument } from '../types/plan';
-import { computePersonAvailability, computeWeeklyCapacityMatrix } from './capacity';
+import {
+  computePersonAvailability,
+  computeTbdWeeklyDemand,
+  computeWeeklyCapacityMatrix,
+  rankPeopleForSlot,
+} from './capacity';
 import {
   addWorkingDays,
   generateWeeks,
@@ -263,6 +268,35 @@ describe('capacity, mid-week handoff, and rollup rules', () => {
     expect(matrix.get('p-alice')!.get('2026-02-02')!.weeklyPct).toBe(50);
     // Ben should be 100% due to Annual Leave
     expect(matrix.get('p-ben')!.get('2026-02-02')!.weeklyPct).toBe(100);
+  });
+
+  it('tracks TBD placeholder demand and ranks best-fitting people ("Who fits?")', () => {
+    const plan = basePlan();
+    // Alice is at 100% on proj-a during Feb 02 - Feb 13; Ben has 0% assignments!
+    plan.assignments.push({
+      id: 'asg-tbd',
+      person_id: null,
+      placeholder_label: 'TBD — QA Lead',
+      project_id: 'proj-a',
+      task_id: null,
+      allocation_pct: 50,
+      start_date: null,
+      end_date: null,
+    });
+
+    const weeks = generateWeeks('2026-02-02', '2026-02-13');
+    const tbdDemand = computeTbdWeeklyDemand(plan, weeks);
+    expect(tbdDemand.get('2026-02-02')!.weeklyPct).toBe(50);
+
+    const ranked = rankPeopleForSlot(plan, '2026-02-02', '2026-02-13', 50);
+    expect(ranked[0].personId).toBe('p-ben');
+    expect(ranked[0].fitStatus).toBe('full');
+    expect(ranked[0].avgFreePct).toBe(100);
+    expect(ranked[0].peakWeeklyAfterPct).toBe(50);
+
+    expect(ranked[1].personId).toBe('p-alice');
+    expect(ranked[1].fitStatus).toBe('conflict');
+    expect(ranked[1].peakWeeklyAfterPct).toBe(150);
   });
 });
 

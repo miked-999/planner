@@ -27,8 +27,10 @@ make dev-frontend
 make test
 ```
 
-## Data Storage
+## Data Storage & Stakeholder Exports
 
 - Live database: `data/planner.db` (SQLite WAL mode, auto-saved on every edit)
 - Snapshots: `data/backups/*.db`
-- Lossless JSON & Excel CSV exports available via **Import / Export** in the top bar.
+- **TBD Demand Slots & "Who fits?"**: Add unassigned `TBD` roles on projects or phases and rank team members by real free capacity.
+- **Presentation Mode & Stakeholder Snapshots**: Toggle **Present** for a clean read-only view, or click **Snapshot** to export high-DPI PNGs, copy to clipboard, or print a 1-page Landscape PDF.
+- Lossless JSON & Excel CSV exports available via **Data** in the top bar.

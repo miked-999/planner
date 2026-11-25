@@ -5,10 +5,17 @@ import {
   ChevronRight,
   Crosshair,
   ExternalLink,
+  Sparkles,
+  UserCheck,
   UserPlus,
   X,
 } from 'lucide-react';
-import { computeWeeklyCapacityMatrix } from '../engine/capacity';
+import {
+  computeTbdWeeklyDemand,
+  computeWeeklyCapacityMatrix,
+  rankPeopleForSlot,
+  resolveAssignmentWindow,
+} from '../engine/capacity';
 import {
   addCalendarDays,
   formatShortDate,
@@ -22,7 +29,9 @@ export function CapacityView() {
   const {
     plan,
     todayIso,
+    isPresentationMode,
     upsertAssignment,
+    assignPersonToPlaceholder,
     setSelectedEntity,
     setActiveView,
     setTeamDrawerOpen,
@@ -37,7 +46,7 @@ export function CapacityView() {
 
   const weeks = useMemo(() => {
     const startMonday = addCalendarDays(mondayOfWeek(todayIso), weekOffset * 7);
-    const endMonday = addCalendarDays(startMonday, 11 * 7); // 12-week horizon
+    const endMonday = addCalendarDays(startMonday, 11 * 7);
     return generateWeeks(startMonday, endMonday);
   }, [todayIso, weekOffset]);
 
@@ -46,24 +55,48 @@ export function CapacityView() {
     [plan, weeks],
   );
 
+  const tbdDemandRow = useMemo(
+    () => computeTbdWeeklyDemand(plan, weeks),
+    [plan, weeks],
+  );
+  const hasAnyTbd = useMemo(
+    () => plan.assignments.some((a) => !a.person_id),
+    [plan.assignments],
+  );
+
   const activeCellData: {
     personName: string;
+    isTbdRow: boolean;
     weekRange: string;
     cell: WeeklyCellCapacity;
   } | null = useMemo(() => {
-    if (!selectedCell) return null;
-    const person = plan.people.find((p) => p.id === selectedCell.personId);
+    if (!selectedCell || isPresentationMode) return null;
     const week = weeks.find((w) => w.weekStart === selectedCell.weekStart);
+    if (!week) return null;
+
+    if (selectedCell.personId === '__tbd__') {
+      const cell = tbdDemandRow.get(selectedCell.weekStart);
+      if (!cell) return null;
+      return {
+        personName: 'Unassigned (TBD) Demand',
+        isTbdRow: true,
+        weekRange: `${week.weekLabel} (${week.shortRange})`,
+        cell,
+      };
+    }
+
+    const person = plan.people.find((p) => p.id === selectedCell.personId);
     const cell = matrix.get(selectedCell.personId)?.get(selectedCell.weekStart);
-    if (!person || !week || !cell) return null;
+    if (!person || !cell) return null;
     return {
       personName: person.name,
+      isTbdRow: false,
       weekRange: `${week.weekLabel} (${week.shortRange})`,
       cell,
     };
-  }, [selectedCell, plan.people, weeks, matrix]);
+  }, [selectedCell, isPresentationMode, plan.people, weeks, matrix, tbdDemandRow]);
 
-  if (plan.people.length === 0) {
+  if (plan.people.length === 0 && !hasAnyTbd) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
         <div className="max-w-sm space-y-3">
@@ -72,14 +105,16 @@ export function CapacityView() {
             Add team members and assign them to projects to view weekly utilisation and
             spot overallocations.
           </p>
-          <button
-            type="button"
-            onClick={() => setTeamDrawerOpen(true)}
-            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer"
-          >
-            <UserPlus className="w-4 h-4" aria-hidden="true" />
-            Manage Team
-          </button>
+          {!isPresentationMode && (
+            <button
+              type="button"
+              onClick={() => setTeamDrawerOpen(true)}
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer"
+            >
+              <UserPlus className="w-4 h-4" aria-hidden="true" />
+              Manage Team
+            </button>
+          )}
         </div>
       </div>
     );
@@ -89,7 +124,7 @@ export function CapacityView() {
     <div className="flex-1 flex flex-col min-h-0">
       {/* Toolbar */}
       <div
-        className="px-4 py-2 border-b flex flex-wrap items-center justify-between gap-2 text-xs"
+        className="px-4 py-2 border-b flex flex-wrap items-center justify-between gap-2 text-xs print:hidden"
         style={{
           backgroundColor: 'var(--bg-surface)',
           borderColor: 'var(--border-default)',
@@ -128,7 +163,10 @@ export function CapacityView() {
         </div>
 
         {/* Legend */}
-        <div className="flex flex-wrap items-center gap-3 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+        <div
+          className="flex flex-wrap items-center gap-3 text-[11px]"
+          style={{ color: 'var(--text-secondary)' }}
+        >
           <span className="inline-flex items-center gap-1.5">
             <span className="w-2.5 h-2.5 rounded-full bg-red-500" />
             &gt;100% Conflict
@@ -199,6 +237,63 @@ export function CapacityView() {
               </tr>
             </thead>
             <tbody>
+              {/* Unassigned TBD Demand Row */}
+              {hasAnyTbd && (
+                <tr>
+                  <th
+                    scope="row"
+                    className="sticky left-0 z-10 text-left py-2.5 px-3 border-b border-r font-semibold text-amber-700 dark:text-amber-400"
+                    style={{
+                      backgroundColor: 'var(--bg-surface)',
+                      borderColor: 'var(--border-default)',
+                    }}
+                  >
+                    <span className="inline-flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                      Unassigned (TBD)
+                    </span>
+                  </th>
+                  {weeks.map((w) => {
+                    const cell = tbdDemandRow.get(w.weekStart);
+                    const pct = cell?.weeklyPct ?? 0;
+                    const isActive =
+                      selectedCell?.personId === '__tbd__' &&
+                      selectedCell?.weekStart === w.weekStart;
+                    return (
+                      <td
+                        key={w.weekStart}
+                        className="p-1 border-b border-r text-center bg-amber-500/4"
+                        style={{ borderColor: 'var(--border-default)' }}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (isPresentationMode) return;
+                            setSelectedCell({
+                              personId: '__tbd__',
+                              weekStart: w.weekStart,
+                            });
+                          }}
+                          className={`w-full py-2 px-1.5 rounded-md inline-flex items-center justify-center gap-1 transition-colors ${
+                            isPresentationMode ? 'cursor-default' : 'cursor-pointer'
+                          } ${
+                            pct > 0
+                              ? 'border border-dashed border-amber-500/60 bg-amber-500/15 text-amber-800 dark:text-amber-300 font-semibold'
+                              : ''
+                          } ${isActive ? 'ring-2 ring-blue-500' : ''}`}
+                        >
+                          <span
+                            style={pct === 0 ? { color: 'var(--text-muted)' } : undefined}
+                          >
+                            {pct > 0 ? `${pct}%` : '—'}
+                          </span>
+                        </button>
+                      </td>
+                    );
+                  })}
+                </tr>
+              )}
+
               {plan.people.map((person) => {
                 const pRow = matrix.get(person.id);
                 return (
@@ -244,15 +339,16 @@ export function CapacityView() {
                         >
                           <button
                             type="button"
-                            onClick={() =>
+                            onClick={() => {
+                              if (isPresentationMode) return;
                               setSelectedCell({
                                 personId: person.id,
                                 weekStart: w.weekStart,
-                              })
-                            }
-                            className={`w-full py-2 px-1.5 rounded-md inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer relative ${cellTone} ${
-                              isActive ? 'ring-2 ring-blue-500' : ''
-                            }`}
+                              });
+                            }}
+                            className={`w-full py-2 px-1.5 rounded-md inline-flex items-center justify-center gap-1.5 transition-colors relative ${
+                              isPresentationMode ? 'cursor-default' : 'cursor-pointer'
+                            } ${cellTone} ${isActive ? 'ring-2 ring-blue-500' : ''}`}
                           >
                             {dotTone && (
                               <span
@@ -287,7 +383,7 @@ export function CapacityView() {
         {activeCellData && (
           <aside
             aria-label="Weekly workload breakdown"
-            className="w-full lg:w-84 shrink-0 border-t lg:border-t-0 lg:border-l p-4 overflow-y-auto space-y-4 text-xs"
+            className="w-full lg:w-88 shrink-0 border-t lg:border-t-0 lg:border-l p-4 overflow-y-auto space-y-4 text-xs print:hidden"
             style={{
               backgroundColor: 'var(--bg-surface)',
               borderColor: 'var(--border-default)',
@@ -298,7 +394,10 @@ export function CapacityView() {
                 <h2 className="font-semibold text-sm">{activeCellData.personName}</h2>
                 <p className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
                   {activeCellData.weekRange} ·{' '}
-                  <strong>{activeCellData.cell.weeklyPct}% weekly load</strong>
+                  <strong>
+                    {activeCellData.cell.weeklyPct}%{' '}
+                    {activeCellData.isTbdRow ? 'unstaffed demand' : 'weekly load'}
+                  </strong>
                 </p>
               </div>
               <button
@@ -311,7 +410,7 @@ export function CapacityView() {
               </button>
             </div>
 
-            {activeCellData.cell.weeklyPct > 100 && (
+            {!activeCellData.isTbdRow && activeCellData.cell.weeklyPct > 100 && (
               <div className="p-2.5 rounded-lg bg-red-500/12 border border-red-500/30 flex items-center gap-2 text-red-600 dark:text-red-400">
                 <AlertCircle className="w-4 h-4 shrink-0" aria-hidden="true" />
                 <span>
@@ -329,7 +428,9 @@ export function CapacityView() {
                   color: 'var(--text-muted)',
                 }}
               >
-                100% available this week — no active assignments or leave.
+                {activeCellData.isTbdRow
+                  ? 'No unstaffed TBD slots in this week.'
+                  : '100% available this week — no active assignments or leave.'}
               </div>
             ) : (
               <div className="space-y-2.5">
@@ -338,6 +439,25 @@ export function CapacityView() {
                     item.kind === 'assignment'
                       ? plan.assignments.find((a) => a.id === item.id)
                       : undefined;
+                  const proj = rawAsg
+                    ? plan.projects.find((p) => p.id === rawAsg.project_id)
+                    : undefined;
+                  const task =
+                    rawAsg && rawAsg.task_id
+                      ? plan.tasks.find((t) => t.id === rawAsg.task_id)
+                      : undefined;
+                  const win =
+                    rawAsg && !rawAsg.person_id
+                      ? resolveAssignmentWindow(rawAsg, proj, task)
+                      : null;
+                  const topMatches = win
+                    ? rankPeopleForSlot(
+                        plan,
+                        win.start,
+                        win.end,
+                        rawAsg?.allocation_pct ?? 100,
+                      ).slice(0, 3)
+                    : [];
 
                   return (
                     <div
@@ -403,8 +523,14 @@ export function CapacityView() {
                       </div>
 
                       {rawAsg && (
-                        <div className="flex items-center justify-between gap-2 pt-1 border-t" style={{ borderColor: 'var(--border-default)' }}>
-                          <label className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+                        <div
+                          className="flex items-center justify-between gap-2 pt-1 border-t"
+                          style={{ borderColor: 'var(--border-default)' }}
+                        >
+                          <label
+                            className="text-[11px]"
+                            style={{ color: 'var(--text-secondary)' }}
+                          >
                             Allocation %:
                           </label>
                           <div className="flex items-center gap-1">
@@ -430,6 +556,57 @@ export function CapacityView() {
                             />
                             <span>%</span>
                           </div>
+                        </div>
+                      )}
+
+                      {/* Inline "Who fits?" quick assign for TBD slots */}
+                      {rawAsg && !rawAsg.person_id && topMatches.length > 0 && (
+                        <div
+                          className="pt-2 border-t space-y-1.5"
+                          style={{ borderColor: 'var(--border-default)' }}
+                        >
+                          <div
+                            className="text-[10px] font-semibold uppercase tracking-wider"
+                            style={{ color: 'var(--text-secondary)' }}
+                          >
+                            Who fits full slot ({formatShortDate(win?.start)} –{' '}
+                            {formatShortDate(win?.end)})?
+                          </div>
+                          {topMatches.map((m) => (
+                            <div
+                              key={m.personId}
+                              className="flex items-center justify-between gap-2"
+                            >
+                              <span className="truncate flex items-center gap-1.5">
+                                <span
+                                  className={`w-2 h-2 rounded-full ${
+                                    m.fitStatus === 'full'
+                                      ? 'bg-emerald-500'
+                                      : m.fitStatus === 'partial'
+                                        ? 'bg-amber-400'
+                                        : 'bg-red-500'
+                                  }`}
+                                />
+                                <span>{m.personName}</span>
+                                <span
+                                  className="text-[10px]"
+                                  style={{ color: 'var(--text-muted)' }}
+                                >
+                                  ({m.avgFreePct}% free)
+                                </span>
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  assignPersonToPlaceholder(rawAsg.id, m.personId)
+                                }
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-medium cursor-pointer"
+                              >
+                                <UserCheck className="w-3 h-3" aria-hidden="true" />
+                                Assign
+                              </button>
+                            </div>
+                          ))}
                         </div>
                       )}
                     </div>

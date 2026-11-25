@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import sqlite3
 import zipfile
 from pathlib import Path
 
@@ -150,4 +151,81 @@ def test_spa_static_serving_and_health(client: TestClient) -> None:
     index_res = client.get("/")
     assert index_res.status_code == 200
     assert "Project &amp; Resource Planner" in index_res.text
+
+
+def test_tbd_placeholder_assignments_and_v1_migration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Simulate a legacy v1 database where assignments.person_id was NOT NULL and placeholder_label did not exist
+    legacy_db = tmp_path / "legacy_v1.db"
+    conn = sqlite3.connect(str(legacy_db))
+    conn.executescript(
+        """
+        CREATE TABLE people (id TEXT PRIMARY KEY, name TEXT NOT NULL, sort_order INTEGER NOT NULL DEFAULT 0);
+        CREATE TABLE projects (
+            id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+            expected_start TEXT NOT NULL, actual_start TEXT, expected_end TEXT NOT NULL,
+            original_expected_end TEXT, required_by TEXT, actual_end TEXT,
+            percent_complete INTEGER NOT NULL DEFAULT 0, auto_progress INTEGER NOT NULL DEFAULT 1,
+            status TEXT NOT NULL DEFAULT 'planned', priority TEXT NOT NULL DEFAULT 'medium',
+            color TEXT NOT NULL DEFAULT '#3b82f6', notes TEXT NOT NULL DEFAULT '', sort_order INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE assignments (
+            id TEXT PRIMARY KEY,
+            person_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+            project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            task_id TEXT,
+            allocation_pct INTEGER,
+            start_date TEXT,
+            end_date TEXT
+        );
+        INSERT INTO people VALUES ('p1', 'Legacy User', 0);
+        INSERT INTO projects (id, name, expected_start, expected_end) VALUES ('pr1', 'Legacy Proj', '2026-12-01', '2026-12-11');
+        INSERT INTO assignments (id, person_id, project_id, allocation_pct) VALUES ('a1', 'p1', 'pr1', 100);
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setenv("PLANNER_DB_PATH", str(legacy_db))
+    monkeypatch.setenv("PLANNER_BACKUP_DIR", str(tmp_path / "backups"))
+
+    with TestClient(app) as c:
+        migrated = c.get("/api/plan").json()
+        assert len(migrated["assignments"]) == 1
+        assert migrated["assignments"][0]["person_id"] == "p1"
+
+        # Now add an unassigned TBD slot and save
+        migrated["assignments"].append(
+            {
+                "id": "a-tbd",
+                "person_id": None,
+                "placeholder_label": "TBD — Lead Reviewer",
+                "project_id": "pr1",
+                "task_id": None,
+                "allocation_pct": 50,
+                "start_date": None,
+                "end_date": None,
+            }
+        )
+        put_res = c.put("/api/plan", json=migrated)
+        assert put_res.status_code == 200
+        saved_tbd = [a for a in put_res.json()["assignments"] if a["id"] == "a-tbd"][0]
+        assert saved_tbd["person_id"] is None
+        assert saved_tbd["placeholder_label"] == "TBD — Lead Reviewer"
+
+        # Also verify CSV import recognises TBD tokens without creating a fake person named TBD
+        csv_text = (
+            "Name,Expected Start,Expected End,Assigned People\n"
+            "Future Initiative,2027-01-05,2027-01-22,TBD: Data Engineer (75%)\n"
+        )
+        imp = c.post("/api/import/csv/projects", json={"csv_text": csv_text, "mode": "merge"})
+        assert imp.status_code == 200
+        body = imp.json()
+        assert body["created_people"] == []
+        assert any(
+            a["person_id"] is None and "Data Engineer" in (a["placeholder_label"] or "")
+            for a in body["plan"]["assignments"]
+        )
+
 

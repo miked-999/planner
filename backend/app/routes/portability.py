@@ -80,7 +80,11 @@ def _build_csv_files(plan: PlanDocument) -> dict[str, str]:
     person_names = {p.id: p.name for p in plan.people}
     proj_people: dict[str, list[str]] = {p.id: [] for p in plan.projects}
     for a in plan.assignments:
-        pname = person_names.get(a.person_id, a.person_id)
+        pname = (
+            person_names.get(a.person_id, a.person_id)
+            if a.person_id
+            else f"[TBD: {a.placeholder_label or 'Unassigned'}]"
+        )
         label = f"{pname} ({a.allocation_pct}%)" if a.allocation_pct is not None else pname
         if a.project_id in proj_people and label not in proj_people[a.project_id]:
             proj_people[a.project_id].append(label)
@@ -179,6 +183,7 @@ def _build_csv_files(plan: PlanDocument) -> dict[str, str]:
             "id",
             "person_id",
             "person_name",
+            "placeholder_label",
             "project_id",
             "project_name",
             "task_id",
@@ -190,8 +195,9 @@ def _build_csv_files(plan: PlanDocument) -> dict[str, str]:
         [
             [
                 a.id,
-                a.person_id,
-                person_names.get(a.person_id, ""),
+                a.person_id or "",
+                person_names.get(a.person_id, "") if a.person_id else "",
+                a.placeholder_label or "",
                 a.project_id,
                 proj_names.get(a.project_id, ""),
                 a.task_id or "",
@@ -407,6 +413,27 @@ def import_projects_csv(req: CsvImportRequest) -> dict[str, Any]:
                     if num_txt.isdigit():
                         alloc = max(1, min(200, int(num_txt)))
                 if not person_label:
+                    continue
+                if person_label.upper().startswith("TBD") or person_label.startswith("[TBD"):
+                    clean_tbd = (
+                        person_label.strip("[]")
+                        .removeprefix("TBD:")
+                        .removeprefix("tbd:")
+                        .strip()
+                        or "TBD"
+                    )
+                    if not clean_tbd.upper().startswith("TBD"):
+                        clean_tbd = f"TBD — {clean_tbd}"
+                    new_assignments.append(
+                        Assignment(
+                            id=f"asg-{uuid.uuid4().hex[:8]}",
+                            person_id=None,
+                            placeholder_label=clean_tbd,
+                            project_id=pid,
+                            task_id=None,
+                            allocation_pct=alloc,
+                        )
+                    )
                     continue
                 person = people_by_lower.get(person_label.lower())
                 if not person:

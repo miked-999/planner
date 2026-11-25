@@ -9,12 +9,18 @@ import {
 } from 'lucide-react';
 import {
   formatDurationLabel,
+  formatShortDate,
   formatSignedWorkingDays,
 } from '../engine/dates';
 import { computeScheduleMetrics } from '../engine/rollup';
 import { usePlan } from '../store/PlanContext';
 import type { PriorityLevel, ProjectStatus } from '../types/plan';
-import { HeadroomBadge, HealthDot } from '../components/ui/StatusBadges';
+import {
+  HeadroomBadge,
+  HealthDot,
+  PriorityBadge,
+  StatusPill,
+} from '../components/ui/StatusBadges';
 
 type SortColumn =
   | 'name'
@@ -32,6 +38,7 @@ const PRIORITY_RANK: Record<PriorityLevel, number> = { low: 1, medium: 2, high: 
 export function ProjectTableView() {
   const {
     plan,
+    isPresentationMode,
     setSelectedEntity,
     createProject,
     updateProject,
@@ -141,62 +148,65 @@ export function ProjectTableView() {
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      {/* Filter & Actions Bar */}
-      <div
-        className="px-4 py-2 border-b flex flex-wrap items-center justify-between gap-2 text-xs"
-        style={{
-          backgroundColor: 'var(--bg-surface)',
-          borderColor: 'var(--border-default)',
-        }}
-      >
-        <div className="flex items-center gap-2">
-          <Filter className="w-3.5 h-3.5" style={{ color: 'var(--text-muted)' }} aria-hidden="true" />
-          <input
-            type="search"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search projects or phases…"
-            aria-label="Search projects"
-            className="px-2.5 py-1 rounded-md border w-52"
-            style={{
-              borderColor: 'var(--border-default)',
-              backgroundColor: 'var(--bg-subtle)',
-            }}
-          />
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            aria-label="Filter by status"
-            className="px-2.5 py-1 rounded-md border"
-            style={{
-              borderColor: 'var(--border-default)',
-              backgroundColor: 'var(--bg-subtle)',
-            }}
-          >
-            <option value="all">All Statuses</option>
-            <option value="planned">Planned</option>
-            <option value="in_progress">In Progress</option>
-            <option value="on_hold">On Hold</option>
-            <option value="completed">Completed</option>
-          </select>
-        </div>
-
-        <button
-          type="button"
-          onClick={() => createProject()}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold cursor-pointer"
+      {!isPresentationMode && (
+        <div
+          className="px-4 py-2 border-b flex flex-wrap items-center justify-between gap-2 text-xs print:hidden"
+          style={{
+            backgroundColor: 'var(--bg-surface)',
+            borderColor: 'var(--border-default)',
+          }}
         >
-          <Plus className="w-3.5 h-3.5" aria-hidden="true" />
-          Add Project
-        </button>
-      </div>
+          <div className="flex items-center gap-2">
+            <Filter
+              className="w-3.5 h-3.5"
+              style={{ color: 'var(--text-muted)' }}
+              aria-hidden="true"
+            />
+            <input
+              type="search"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search projects or phases…"
+              aria-label="Search projects"
+              className="px-2.5 py-1 rounded-md border w-52"
+              style={{
+                borderColor: 'var(--border-default)',
+                backgroundColor: 'var(--bg-subtle)',
+              }}
+            />
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              aria-label="Filter by status"
+              className="px-2.5 py-1 rounded-md border"
+              style={{
+                borderColor: 'var(--border-default)',
+                backgroundColor: 'var(--bg-subtle)',
+              }}
+            >
+              <option value="all">All Statuses</option>
+              <option value="planned">Planned</option>
+              <option value="in_progress">In Progress</option>
+              <option value="on_hold">On Hold</option>
+              <option value="completed">Completed</option>
+            </select>
+          </div>
 
-      {/* Live region for screen-reader sort feedback */}
+          <button
+            type="button"
+            onClick={() => createProject()}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold cursor-pointer"
+          >
+            <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+            Add Project
+          </button>
+        </div>
+      )}
+
       <div role="status" className="sr-status">
         {sortAnnouncement}
       </div>
 
-      {/* Scrollable Table Container */}
       <div
         tabIndex={0}
         role="region"
@@ -221,7 +231,7 @@ export function ProjectTableView() {
                   borderColor: 'var(--border-default)',
                 }}
               >
-                People
+                People &amp; TBD
               </th>
               {renderSortHeader('status', 'Status')}
               {renderSortHeader('priority', 'Priority')}
@@ -250,14 +260,16 @@ export function ProjectTableView() {
               const isOpen = expanded.has(proj.id);
               const metrics = computeScheduleMetrics(proj);
 
+              const projAsgs = plan.assignments.filter((a) => a.project_id === proj.id);
               const peopleNames = Array.from(
                 new Set(
-                  plan.assignments
-                    .filter((a) => a.project_id === proj.id)
-                    .map((a) => peopleById.get(a.person_id))
+                  projAsgs
+                    .filter((a) => Boolean(a.person_id))
+                    .map((a) => peopleById.get(a.person_id!))
                     .filter((x): x is string => Boolean(x)),
                 ),
               );
+              const tbdSlots = projAsgs.filter((a) => !a.person_id);
 
               return (
                 <React.Fragment key={proj.id}>
@@ -299,29 +311,34 @@ export function ProjectTableView() {
                         />
                         <HealthDot health={metrics.health} />
 
-                        <input
-                          type="text"
-                          value={proj.name}
-                          onChange={(e) =>
-                            updateProject(proj.id, { name: e.target.value })
-                          }
-                          aria-label="Project name"
-                          className="font-semibold bg-transparent px-1 py-0.5 rounded hover:bg-slate-500/8 focus:bg-slate-500/10 flex-1 min-w-[160px]"
-                        />
-
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setSelectedEntity({
-                              type: 'project',
-                              id: proj.id,
-                              projectId: proj.id,
-                            })
-                          }
-                          className="text-[11px] text-blue-600 dark:text-blue-400 hover:underline cursor-pointer shrink-0"
-                        >
-                          Edit
-                        </button>
+                        {isPresentationMode ? (
+                          <span className="font-semibold">{proj.name}</span>
+                        ) : (
+                          <>
+                            <input
+                              type="text"
+                              value={proj.name}
+                              onChange={(e) =>
+                                updateProject(proj.id, { name: e.target.value })
+                              }
+                              aria-label="Project name"
+                              className="font-semibold bg-transparent px-1 py-0.5 rounded hover:bg-slate-500/8 focus:bg-slate-500/10 flex-1 min-w-[160px]"
+                            />
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setSelectedEntity({
+                                  type: 'project',
+                                  id: proj.id,
+                                  projectId: proj.id,
+                                })
+                              }
+                              className="text-[11px] text-blue-600 dark:text-blue-400 hover:underline cursor-pointer shrink-0 print:hidden"
+                            >
+                              Edit
+                            </button>
+                          </>
+                        )}
                       </div>
                     </td>
 
@@ -331,20 +348,34 @@ export function ProjectTableView() {
                     >
                       <button
                         type="button"
-                        onClick={() =>
+                        onClick={() => {
+                          if (isPresentationMode) return;
                           setSelectedEntity({
                             type: 'project',
                             id: proj.id,
                             projectId: proj.id,
-                          })
-                        }
-                        className="text-left hover:underline cursor-pointer"
+                          });
+                        }}
+                        className={`text-left flex flex-wrap items-center gap-1 ${
+                          isPresentationMode ? 'cursor-default' : 'hover:underline cursor-pointer'
+                        }`}
                       >
-                        {peopleNames.length > 0 ? (
+                        {peopleNames.length > 0 && (
                           <span>{peopleNames.join(', ')}</span>
-                        ) : (
-                          <span style={{ color: 'var(--text-muted)' }}>+ Assign</span>
                         )}
+                        {tbdSlots.map((tbd) => (
+                          <span
+                            key={tbd.id}
+                            className="px-1.5 py-0.2 rounded border border-dashed border-amber-500/70 bg-amber-500/12 text-[10px] font-semibold text-amber-700 dark:text-amber-300"
+                          >
+                            {tbd.placeholder_label || 'TBD'}
+                          </span>
+                        ))}
+                        {peopleNames.length === 0 &&
+                          tbdSlots.length === 0 &&
+                          !isPresentationMode && (
+                            <span style={{ color: 'var(--text-muted)' }}>+ Assign</span>
+                          )}
                       </button>
                     </td>
 
@@ -352,121 +383,141 @@ export function ProjectTableView() {
                       className="py-2 px-3 border-b"
                       style={{ borderColor: 'var(--border-default)' }}
                     >
-                      <select
-                        value={proj.status}
-                        onChange={(e) =>
-                          updateProject(proj.id, {
-                            status: e.target.value as ProjectStatus,
-                          })
-                        }
-                        aria-label={`Status for ${proj.name}`}
-                        className="px-2 py-1 rounded border text-[11px]"
-                        style={{
-                          borderColor: 'var(--border-default)',
-                          backgroundColor: 'var(--bg-subtle)',
-                        }}
-                      >
-                        <option value="planned">Planned</option>
-                        <option value="in_progress">In Progress</option>
-                        <option value="on_hold">On Hold</option>
-                        <option value="completed">Completed</option>
-                      </select>
+                      {isPresentationMode ? (
+                        <StatusPill status={proj.status} />
+                      ) : (
+                        <select
+                          value={proj.status}
+                          onChange={(e) =>
+                            updateProject(proj.id, {
+                              status: e.target.value as ProjectStatus,
+                            })
+                          }
+                          aria-label={`Status for ${proj.name}`}
+                          className="px-2 py-1 rounded border text-[11px]"
+                          style={{
+                            borderColor: 'var(--border-default)',
+                            backgroundColor: 'var(--bg-subtle)',
+                          }}
+                        >
+                          <option value="planned">Planned</option>
+                          <option value="in_progress">In Progress</option>
+                          <option value="on_hold">On Hold</option>
+                          <option value="completed">Completed</option>
+                        </select>
+                      )}
                     </td>
 
                     <td
                       className="py-2 px-3 border-b"
                       style={{ borderColor: 'var(--border-default)' }}
                     >
-                      <select
-                        value={proj.priority}
-                        onChange={(e) =>
-                          updateProject(proj.id, {
-                            priority: e.target.value as PriorityLevel,
-                          })
-                        }
-                        aria-label={`Priority for ${proj.name}`}
-                        className="px-2 py-1 rounded border text-[11px]"
-                        style={{
-                          borderColor: 'var(--border-default)',
-                          backgroundColor: 'var(--bg-subtle)',
-                        }}
-                      >
-                        <option value="low">Low</option>
-                        <option value="medium">Medium</option>
-                        <option value="high">High</option>
-                      </select>
+                      {isPresentationMode ? (
+                        <PriorityBadge priority={proj.priority} />
+                      ) : (
+                        <select
+                          value={proj.priority}
+                          onChange={(e) =>
+                            updateProject(proj.id, {
+                              priority: e.target.value as PriorityLevel,
+                            })
+                          }
+                          aria-label={`Priority for ${proj.name}`}
+                          className="px-2 py-1 rounded border text-[11px]"
+                          style={{
+                            borderColor: 'var(--border-default)',
+                            backgroundColor: 'var(--bg-subtle)',
+                          }}
+                        >
+                          <option value="low">Low</option>
+                          <option value="medium">Medium</option>
+                          <option value="high">High</option>
+                        </select>
+                      )}
                     </td>
 
                     <td
                       className="py-2 px-3 border-b"
                       style={{ borderColor: 'var(--border-default)' }}
                     >
-                      <input
-                        type="date"
-                        disabled={hasTasks}
-                        value={proj.expected_start}
-                        onChange={(e) =>
-                          e.target.value &&
-                          updateProject(
-                            proj.id,
-                            { expected_start: e.target.value },
-                            true,
-                          )
-                        }
-                        aria-label={`Expected start for ${proj.name}`}
-                        className="px-1.5 py-1 rounded border disabled:opacity-60"
-                        style={{
-                          borderColor: 'var(--border-default)',
-                          backgroundColor: 'var(--bg-subtle)',
-                        }}
-                      />
+                      {isPresentationMode ? (
+                        <span>{formatShortDate(proj.expected_start)}</span>
+                      ) : (
+                        <input
+                          type="date"
+                          disabled={hasTasks}
+                          value={proj.expected_start}
+                          onChange={(e) =>
+                            e.target.value &&
+                            updateProject(
+                              proj.id,
+                              { expected_start: e.target.value },
+                              true,
+                            )
+                          }
+                          aria-label={`Expected start for ${proj.name}`}
+                          className="px-1.5 py-1 rounded border disabled:opacity-60"
+                          style={{
+                            borderColor: 'var(--border-default)',
+                            backgroundColor: 'var(--bg-subtle)',
+                          }}
+                        />
+                      )}
                     </td>
 
                     <td
                       className="py-2 px-3 border-b"
                       style={{ borderColor: 'var(--border-default)' }}
                     >
-                      <input
-                        type="date"
-                        disabled={hasTasks}
-                        min={proj.expected_start}
-                        value={proj.expected_end}
-                        onChange={(e) =>
-                          e.target.value &&
-                          updateProject(
-                            proj.id,
-                            { expected_end: e.target.value },
-                            true,
-                          )
-                        }
-                        aria-label={`Expected end for ${proj.name}`}
-                        className="px-1.5 py-1 rounded border disabled:opacity-60"
-                        style={{
-                          borderColor: 'var(--border-default)',
-                          backgroundColor: 'var(--bg-subtle)',
-                        }}
-                      />
+                      {isPresentationMode ? (
+                        <span>{formatShortDate(proj.expected_end)}</span>
+                      ) : (
+                        <input
+                          type="date"
+                          disabled={hasTasks}
+                          min={proj.expected_start}
+                          value={proj.expected_end}
+                          onChange={(e) =>
+                            e.target.value &&
+                            updateProject(
+                              proj.id,
+                              { expected_end: e.target.value },
+                              true,
+                            )
+                          }
+                          aria-label={`Expected end for ${proj.name}`}
+                          className="px-1.5 py-1 rounded border disabled:opacity-60"
+                          style={{
+                            borderColor: 'var(--border-default)',
+                            backgroundColor: 'var(--bg-subtle)',
+                          }}
+                        />
+                      )}
                     </td>
 
                     <td
                       className="py-2 px-3 border-b"
                       style={{ borderColor: 'var(--border-default)' }}
                     >
-                      <input
-                        type="date"
-                        value={proj.required_by ?? ''}
-                        onChange={(e) =>
-                          updateProject(proj.id, {
-                            required_by: e.target.value || null,
-                          })
-                        }
-                        aria-label={`Required by date for ${proj.name}`}
-                        className="px-1.5 py-1 rounded border"
-                        style={{
-                          borderColor: 'var(--border-default)',
-                          backgroundColor: 'var(--bg-subtle)',
-                        }}
-                      />
+                      {isPresentationMode ? (
+                        <span>{formatShortDate(proj.required_by)}</span>
+                      ) : (
+                        <input
+                          type="date"
+                          value={proj.required_by ?? ''}
+                          onChange={(e) =>
+                            updateProject(proj.id, {
+                              required_by: e.target.value || null,
+                            })
+                          }
+                          aria-label={`Required by date for ${proj.name}`}
+                          className="px-1.5 py-1 rounded border"
+                          style={{
+                            borderColor: 'var(--border-default)',
+                            backgroundColor: 'var(--bg-subtle)',
+                          }}
+                        />
+                      )}
                     </td>
 
                     <td
@@ -501,41 +552,50 @@ export function ProjectTableView() {
                       className="py-2 px-3 border-b"
                       style={{ borderColor: 'var(--border-default)' }}
                     >
-                      <div className="flex items-center gap-1.5">
-                        <input
-                          type="number"
-                          min={0}
-                          max={100}
-                          step={5}
-                          disabled={hasTasks && proj.auto_progress}
-                          value={proj.percent_complete}
-                          onChange={(e) =>
-                            updateProject(proj.id, {
-                              percent_complete: Math.max(
-                                0,
-                                Math.min(100, Number(e.target.value)),
-                              ),
-                            })
-                          }
-                          aria-label={`Percent complete for ${proj.name}`}
-                          className="w-14 px-1.5 py-1 rounded border text-right disabled:opacity-65"
-                          style={{
-                            borderColor: 'var(--border-default)',
-                            backgroundColor: 'var(--bg-subtle)',
-                          }}
-                        />
-                        <span>%</span>
-                      </div>
+                      {isPresentationMode ? (
+                        <span className="font-medium">{proj.percent_complete}%</span>
+                      ) : (
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            type="number"
+                            min={0}
+                            max={100}
+                            step={5}
+                            disabled={hasTasks && proj.auto_progress}
+                            value={proj.percent_complete}
+                            onChange={(e) =>
+                              updateProject(proj.id, {
+                                percent_complete: Math.max(
+                                  0,
+                                  Math.min(100, Number(e.target.value)),
+                                ),
+                              })
+                            }
+                            aria-label={`Percent complete for ${proj.name}`}
+                            className="w-14 px-1.5 py-1 rounded border text-right disabled:opacity-65"
+                            style={{
+                              borderColor: 'var(--border-default)',
+                              backgroundColor: 'var(--bg-subtle)',
+                            }}
+                          />
+                          <span>%</span>
+                        </div>
+                      )}
                     </td>
                   </tr>
 
-                  {/* Expanded Subtasks */}
                   {isOpen &&
                     childTasks.map((task) => {
                       const tm = computeScheduleMetrics(task);
-                      const taskPeople = plan.assignments
-                        .filter((a) => a.task_id === task.id)
-                        .map((a) => peopleById.get(a.person_id))
+                      const taskAsgs = plan.assignments.filter(
+                        (a) => a.task_id === task.id,
+                      );
+                      const taskPeople = taskAsgs
+                        .map((a) =>
+                          a.person_id
+                            ? peopleById.get(a.person_id)
+                            : a.placeholder_label || 'TBD',
+                        )
                         .filter((x): x is string => Boolean(x));
 
                       return (
@@ -549,28 +609,34 @@ export function ProjectTableView() {
                           >
                             <div className="flex items-center gap-1.5">
                               <HealthDot health={tm.health} />
-                              <input
-                                type="text"
-                                value={task.name}
-                                onChange={(e) =>
-                                  updateTask(task.id, { name: e.target.value })
-                                }
-                                aria-label="Phase name"
-                                className="bg-transparent px-1 py-0.5 rounded flex-1"
-                              />
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setSelectedEntity({
-                                    type: 'task',
-                                    id: task.id,
-                                    projectId: proj.id,
-                                  })
-                                }
-                                className="text-[11px] text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
-                              >
-                                Details
-                              </button>
+                              {isPresentationMode ? (
+                                <span>{task.name}</span>
+                              ) : (
+                                <>
+                                  <input
+                                    type="text"
+                                    value={task.name}
+                                    onChange={(e) =>
+                                      updateTask(task.id, { name: e.target.value })
+                                    }
+                                    aria-label="Phase name"
+                                    className="bg-transparent px-1 py-0.5 rounded flex-1"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setSelectedEntity({
+                                        type: 'task',
+                                        id: task.id,
+                                        projectId: proj.id,
+                                      })
+                                    }
+                                    className="text-[11px] text-blue-600 dark:text-blue-400 hover:underline cursor-pointer print:hidden"
+                                  >
+                                    Details
+                                  </button>
+                                </>
+                              )}
                             </div>
                           </td>
 
@@ -588,119 +654,139 @@ export function ProjectTableView() {
                             className="py-1.5 px-3 border-b"
                             style={{ borderColor: 'var(--border-default)' }}
                           >
-                            <select
-                              value={task.status}
-                              onChange={(e) =>
-                                updateTask(task.id, {
-                                  status: e.target.value as ProjectStatus,
-                                })
-                              }
-                              aria-label={`Status for ${task.name}`}
-                              className="px-2 py-0.5 rounded border text-[11px]"
-                              style={{
-                                borderColor: 'var(--border-default)',
-                                backgroundColor: 'var(--bg-surface)',
-                              }}
-                            >
-                              <option value="planned">Planned</option>
-                              <option value="in_progress">In Progress</option>
-                              <option value="on_hold">On Hold</option>
-                              <option value="completed">Completed</option>
-                            </select>
+                            {isPresentationMode ? (
+                              <StatusPill status={task.status} />
+                            ) : (
+                              <select
+                                value={task.status}
+                                onChange={(e) =>
+                                  updateTask(task.id, {
+                                    status: e.target.value as ProjectStatus,
+                                  })
+                                }
+                                aria-label={`Status for ${task.name}`}
+                                className="px-2 py-0.5 rounded border text-[11px]"
+                                style={{
+                                  borderColor: 'var(--border-default)',
+                                  backgroundColor: 'var(--bg-surface)',
+                                }}
+                              >
+                                <option value="planned">Planned</option>
+                                <option value="in_progress">In Progress</option>
+                                <option value="on_hold">On Hold</option>
+                                <option value="completed">Completed</option>
+                              </select>
+                            )}
                           </td>
 
                           <td
                             className="py-1.5 px-3 border-b"
                             style={{ borderColor: 'var(--border-default)' }}
                           >
-                            <select
-                              value={task.priority}
-                              onChange={(e) =>
-                                updateTask(task.id, {
-                                  priority: e.target.value as PriorityLevel,
-                                })
-                              }
-                              aria-label={`Priority for ${task.name}`}
-                              className="px-2 py-0.5 rounded border text-[11px]"
-                              style={{
-                                borderColor: 'var(--border-default)',
-                                backgroundColor: 'var(--bg-surface)',
-                              }}
-                            >
-                              <option value="low">Low</option>
-                              <option value="medium">Medium</option>
-                              <option value="high">High</option>
-                            </select>
+                            {isPresentationMode ? (
+                              <PriorityBadge priority={task.priority} />
+                            ) : (
+                              <select
+                                value={task.priority}
+                                onChange={(e) =>
+                                  updateTask(task.id, {
+                                    priority: e.target.value as PriorityLevel,
+                                  })
+                                }
+                                aria-label={`Priority for ${task.name}`}
+                                className="px-2 py-0.5 rounded border text-[11px]"
+                                style={{
+                                  borderColor: 'var(--border-default)',
+                                  backgroundColor: 'var(--bg-surface)',
+                                }}
+                              >
+                                <option value="low">Low</option>
+                                <option value="medium">Medium</option>
+                                <option value="high">High</option>
+                              </select>
+                            )}
                           </td>
 
                           <td
                             className="py-1.5 px-3 border-b"
                             style={{ borderColor: 'var(--border-default)' }}
                           >
-                            <input
-                              type="date"
-                              value={task.expected_start}
-                              onChange={(e) =>
-                                e.target.value &&
-                                updateTask(
-                                  task.id,
-                                  { expected_start: e.target.value },
-                                  true,
-                                )
-                              }
-                              aria-label={`Expected start for ${task.name}`}
-                              className="px-1.5 py-0.5 rounded border text-[11px]"
-                              style={{
-                                borderColor: 'var(--border-default)',
-                                backgroundColor: 'var(--bg-surface)',
-                              }}
-                            />
+                            {isPresentationMode ? (
+                              <span>{formatShortDate(task.expected_start)}</span>
+                            ) : (
+                              <input
+                                type="date"
+                                value={task.expected_start}
+                                onChange={(e) =>
+                                  e.target.value &&
+                                  updateTask(
+                                    task.id,
+                                    { expected_start: e.target.value },
+                                    true,
+                                  )
+                                }
+                                aria-label={`Expected start for ${task.name}`}
+                                className="px-1.5 py-0.5 rounded border text-[11px]"
+                                style={{
+                                  borderColor: 'var(--border-default)',
+                                  backgroundColor: 'var(--bg-surface)',
+                                }}
+                              />
+                            )}
                           </td>
 
                           <td
                             className="py-1.5 px-3 border-b"
                             style={{ borderColor: 'var(--border-default)' }}
                           >
-                            <input
-                              type="date"
-                              min={task.expected_start}
-                              value={task.expected_end}
-                              onChange={(e) =>
-                                e.target.value &&
-                                updateTask(
-                                  task.id,
-                                  { expected_end: e.target.value },
-                                  true,
-                                )
-                              }
-                              aria-label={`Expected end for ${task.name}`}
-                              className="px-1.5 py-0.5 rounded border text-[11px]"
-                              style={{
-                                borderColor: 'var(--border-default)',
-                                backgroundColor: 'var(--bg-surface)',
-                              }}
-                            />
+                            {isPresentationMode ? (
+                              <span>{formatShortDate(task.expected_end)}</span>
+                            ) : (
+                              <input
+                                type="date"
+                                min={task.expected_start}
+                                value={task.expected_end}
+                                onChange={(e) =>
+                                  e.target.value &&
+                                  updateTask(
+                                    task.id,
+                                    { expected_end: e.target.value },
+                                    true,
+                                  )
+                                }
+                                aria-label={`Expected end for ${task.name}`}
+                                className="px-1.5 py-0.5 rounded border text-[11px]"
+                                style={{
+                                  borderColor: 'var(--border-default)',
+                                  backgroundColor: 'var(--bg-surface)',
+                                }}
+                              />
+                            )}
                           </td>
 
                           <td
                             className="py-1.5 px-3 border-b"
                             style={{ borderColor: 'var(--border-default)' }}
                           >
-                            <input
-                              type="date"
-                              value={task.required_by ?? ''}
-                              onChange={(e) =>
-                                updateTask(task.id, {
-                                  required_by: e.target.value || null,
-                                })
-                              }
-                              aria-label={`Required by for ${task.name}`}
-                              className="px-1.5 py-0.5 rounded border text-[11px]"
-                              style={{
-                                borderColor: 'var(--border-default)',
-                                backgroundColor: 'var(--bg-surface)',
-                              }}
-                            />
+                            {isPresentationMode ? (
+                              <span>{formatShortDate(task.required_by)}</span>
+                            ) : (
+                              <input
+                                type="date"
+                                value={task.required_by ?? ''}
+                                onChange={(e) =>
+                                  updateTask(task.id, {
+                                    required_by: e.target.value || null,
+                                  })
+                                }
+                                aria-label={`Required by for ${task.name}`}
+                                className="px-1.5 py-0.5 rounded border text-[11px]"
+                                style={{
+                                  borderColor: 'var(--border-default)',
+                                  backgroundColor: 'var(--bg-surface)',
+                                }}
+                              />
+                            )}
                           </td>
 
                           <td
@@ -724,36 +810,40 @@ export function ProjectTableView() {
                             className="py-1.5 px-3 border-b"
                             style={{ borderColor: 'var(--border-default)' }}
                           >
-                            <div className="flex items-center gap-1">
-                              <input
-                                type="number"
-                                min={0}
-                                max={100}
-                                step={5}
-                                value={task.percent_complete}
-                                onChange={(e) =>
-                                  updateTask(task.id, {
-                                    percent_complete: Math.max(
-                                      0,
-                                      Math.min(100, Number(e.target.value)),
-                                    ),
-                                  })
-                                }
-                                aria-label={`Percent complete for ${task.name}`}
-                                className="w-14 px-1.5 py-0.5 rounded border text-right text-[11px]"
-                                style={{
-                                  borderColor: 'var(--border-default)',
-                                  backgroundColor: 'var(--bg-surface)',
-                                }}
-                              />
-                              <span>%</span>
-                            </div>
+                            {isPresentationMode ? (
+                              <span>{task.percent_complete}%</span>
+                            ) : (
+                              <div className="flex items-center gap-1">
+                                <input
+                                  type="number"
+                                  min={0}
+                                  max={100}
+                                  step={5}
+                                  value={task.percent_complete}
+                                  onChange={(e) =>
+                                    updateTask(task.id, {
+                                      percent_complete: Math.max(
+                                        0,
+                                        Math.min(100, Number(e.target.value)),
+                                      ),
+                                    })
+                                  }
+                                  aria-label={`Percent complete for ${task.name}`}
+                                  className="w-14 px-1.5 py-0.5 rounded border text-right text-[11px]"
+                                  style={{
+                                    borderColor: 'var(--border-default)',
+                                    backgroundColor: 'var(--bg-surface)',
+                                  }}
+                                />
+                                <span>%</span>
+                              </div>
+                            )}
                           </td>
                         </tr>
                       );
                     })}
 
-                  {isOpen && (
+                  {isOpen && !isPresentationMode && (
                     <tr style={{ backgroundColor: 'var(--bg-subtle)' }}>
                       <td
                         colSpan={10}

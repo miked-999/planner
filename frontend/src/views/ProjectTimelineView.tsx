@@ -32,9 +32,9 @@ import { HealthDot, StatusPill } from '../components/ui/StatusBadges';
 type ZoomMode = 'compact' | 'standard' | 'detailed';
 
 const DAY_WIDTH_BY_ZOOM: Record<ZoomMode, number> = {
-  compact: 10,  // 70px per week
-  standard: 16, // 112px per week
-  detailed: 26, // 182px per week
+  compact: 10,
+  standard: 16,
+  detailed: 26,
 };
 
 const ROW_HEIGHT = 40;
@@ -56,6 +56,7 @@ interface TimelineRow {
   hasChildren: boolean;
   isExpanded: boolean;
   assigneeNames: string[];
+  tbdCount: number;
   raw: Project | Task;
 }
 
@@ -75,6 +76,7 @@ export function ProjectTimelineView() {
   const {
     plan,
     todayIso,
+    isPresentationMode,
     selectedEntity,
     setSelectedEntity,
     commitWithCascadeCheck,
@@ -105,7 +107,6 @@ export function ProjectTimelineView() {
     [plan.people],
   );
 
-  // Build visible rows
   const rows = useMemo<TimelineRow[]>(() => {
     const q = searchQuery.trim().toLowerCase();
     const out: TimelineRow[] = [];
@@ -114,7 +115,9 @@ export function ProjectTimelineView() {
       if (statusFilter !== 'all' && proj.status !== statusFilter) continue;
 
       const projAssignments = plan.assignments.filter((a) => a.project_id === proj.id);
-      if (
+      if (personFilter === '__tbd__') {
+        if (!projAssignments.some((a) => !a.person_id)) continue;
+      } else if (
         personFilter !== 'all' &&
         !projAssignments.some((a) => a.person_id === personFilter)
       ) {
@@ -131,10 +134,15 @@ export function ProjectTimelineView() {
       const projPeople = Array.from(
         new Set(
           projAssignments
-            .map((a) => peopleById.get(a.person_id))
+            .map((a) =>
+              a.person_id
+                ? peopleById.get(a.person_id)
+                : a.placeholder_label || 'TBD',
+            )
             .filter((x): x is string => Boolean(x)),
         ),
       );
+      const projTbdCount = projAssignments.filter((a) => !a.person_id).length;
 
       const isExpanded = !collapsedProjects.has(proj.id);
       out.push({
@@ -153,16 +161,21 @@ export function ProjectTimelineView() {
         hasChildren: childTasks.length > 0,
         isExpanded,
         assigneeNames: projPeople,
+        tbdCount: projTbdCount,
         raw: proj,
       });
 
       if (isExpanded) {
         for (const task of childTasks) {
+          const taskAsgs = plan.assignments.filter((a) => a.task_id === task.id);
           const taskPeople = Array.from(
             new Set(
-              plan.assignments
-                .filter((a) => a.task_id === task.id)
-                .map((a) => peopleById.get(a.person_id))
+              taskAsgs
+                .map((a) =>
+                  a.person_id
+                    ? peopleById.get(a.person_id)
+                    : a.placeholder_label || 'TBD',
+                )
                 .filter((x): x is string => Boolean(x)),
             ),
           );
@@ -182,6 +195,7 @@ export function ProjectTimelineView() {
             hasChildren: false,
             isExpanded: false,
             assigneeNames: taskPeople,
+            tbdCount: taskAsgs.filter((a) => !a.person_id).length,
             raw: task,
           });
         }
@@ -199,7 +213,6 @@ export function ProjectTimelineView() {
     searchQuery,
   ]);
 
-  // Compute timeline window spanning all items + generous buffer
   const { timelineStart, weeks, totalWidth } = useMemo(() => {
     const allDates = [
       todayIso,
@@ -219,7 +232,6 @@ export function ProjectTimelineView() {
     };
   }, [plan.projects, todayIso, dayPx]);
 
-  // Group weeks by month for top header band
   const monthSpans = useMemo(() => {
     const spans: { key: string; label: string; weekCount: number }[] = [];
     for (const w of weeks) {
@@ -267,6 +279,7 @@ export function ProjectTimelineView() {
     row: TimelineRow,
     mode: DragState['mode'],
   ) => {
+    if (isPresentationMode) return;
     e.stopPropagation();
     if (e.button !== 0) return;
 
@@ -286,7 +299,6 @@ export function ProjectTimelineView() {
     let latestDelta = 0;
     const onMove = (ev: PointerEvent) => {
       const dx = ev.clientX - initial.startClientX;
-      // Convert visual pixel drag into working days (7 calendar px = 5 working days)
       const approxCalendarDays = dx / dayPx;
       const wdDelta = Math.round((approxCalendarDays * 5) / 7);
       if (wdDelta !== latestDelta) {
@@ -337,7 +349,6 @@ export function ProjectTimelineView() {
     });
   };
 
-  // Row index lookup for SVG dependency connectors
   const rowIndexMap = useMemo(() => {
     const m = new Map<string, { idx: number; row: TimelineRow }>();
     rows.forEach((r, idx) => m.set(r.key, { idx, row: r }));
@@ -350,28 +361,30 @@ export function ProjectTimelineView() {
         <div className="max-w-md space-y-4">
           <h2 className="text-lg font-semibold">Start Your Team&apos;s Project Plan</h2>
           <p className="text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-            Create high-level projects, assign team members, visualise capacity conflicts, and
-            preview knock-on dependency shifts alongside Jira.
+            Create high-level projects, assign team members or TBD slots, visualise capacity
+            conflicts, and preview knock-on dependency shifts alongside Jira.
           </p>
-          <div className="flex items-center justify-center gap-3 pt-2">
-            <button
-              type="button"
-              onClick={() => createProject()}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer"
-            >
-              <Plus className="w-4 h-4" aria-hidden="true" />
-              Create First Project
-            </button>
-            <button
-              type="button"
-              onClick={() => void loadSamplePlan()}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg border text-xs font-medium hover:bg-slate-500/10 cursor-pointer"
-              style={{ borderColor: 'var(--border-strong)' }}
-            >
-              <Sparkles className="w-4 h-4 text-amber-500" aria-hidden="true" />
-              Load Sample Plan
-            </button>
-          </div>
+          {!isPresentationMode && (
+            <div className="flex items-center justify-center gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => createProject()}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer"
+              >
+                <Plus className="w-4 h-4" aria-hidden="true" />
+                Create First Project
+              </button>
+              <button
+                type="button"
+                onClick={() => void loadSamplePlan()}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg border text-xs font-medium hover:bg-slate-500/10 cursor-pointer"
+                style={{ borderColor: 'var(--border-strong)' }}
+              >
+                <Sparkles className="w-4 h-4 text-amber-500" aria-hidden="true" />
+                Load Sample Plan
+              </button>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -383,7 +396,7 @@ export function ProjectTimelineView() {
     <div className="flex-1 flex flex-col min-h-0">
       {/* Toolbar */}
       <div
-        className="px-4 py-2 border-b flex flex-wrap items-center justify-between gap-2 text-xs"
+        className="px-4 py-2 border-b flex flex-wrap items-center justify-between gap-2 text-xs print:hidden"
         style={{
           backgroundColor: 'var(--bg-surface)',
           borderColor: 'var(--border-default)',
@@ -400,7 +413,6 @@ export function ProjectTimelineView() {
             Today
           </button>
 
-          {/* Zoom Controls */}
           <div
             className="inline-flex items-center rounded-md border overflow-hidden"
             style={{ borderColor: 'var(--border-default)' }}
@@ -430,59 +442,68 @@ export function ProjectTimelineView() {
             </button>
           </div>
 
-          {/* Filters */}
-          <div className="flex items-center gap-1.5 ml-1">
-            <Filter className="w-3.5 h-3.5" style={{ color: 'var(--text-muted)' }} aria-hidden="true" />
-            <input
-              type="search"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Filter projects…"
-              aria-label="Filter projects by name"
-              className="px-2.5 py-1 rounded-md border w-36"
-              style={{
-                borderColor: 'var(--border-default)',
-                backgroundColor: 'var(--bg-subtle)',
-              }}
-            />
-            <select
-              value={personFilter}
-              onChange={(e) => setPersonFilter(e.target.value)}
-              aria-label="Filter by person"
-              className="px-2 py-1 rounded-md border"
-              style={{
-                borderColor: 'var(--border-default)',
-                backgroundColor: 'var(--bg-subtle)',
-              }}
-            >
-              <option value="all">All People</option>
-              {plan.people.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              aria-label="Filter by status"
-              className="px-2 py-1 rounded-md border"
-              style={{
-                borderColor: 'var(--border-default)',
-                backgroundColor: 'var(--bg-subtle)',
-              }}
-            >
-              <option value="all">All Statuses</option>
-              <option value="planned">Planned</option>
-              <option value="in_progress">In Progress</option>
-              <option value="on_hold">On Hold</option>
-              <option value="completed">Completed</option>
-            </select>
-          </div>
+          {!isPresentationMode && (
+            <div className="flex items-center gap-1.5 ml-1">
+              <Filter
+                className="w-3.5 h-3.5"
+                style={{ color: 'var(--text-muted)' }}
+                aria-hidden="true"
+              />
+              <input
+                type="search"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Filter projects…"
+                aria-label="Filter projects by name"
+                className="px-2.5 py-1 rounded-md border w-36"
+                style={{
+                  borderColor: 'var(--border-default)',
+                  backgroundColor: 'var(--bg-subtle)',
+                }}
+              />
+              <select
+                value={personFilter}
+                onChange={(e) => setPersonFilter(e.target.value)}
+                aria-label="Filter by person"
+                className="px-2 py-1 rounded-md border"
+                style={{
+                  borderColor: 'var(--border-default)',
+                  backgroundColor: 'var(--bg-subtle)',
+                }}
+              >
+                <option value="all">All People</option>
+                <option value="__tbd__">Has Unassigned (TBD)</option>
+                {plan.people.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                aria-label="Filter by status"
+                className="px-2 py-1 rounded-md border"
+                style={{
+                  borderColor: 'var(--border-default)',
+                  backgroundColor: 'var(--bg-subtle)',
+                }}
+              >
+                <option value="all">All Statuses</option>
+                <option value="planned">Planned</option>
+                <option value="in_progress">In Progress</option>
+                <option value="on_hold">On Hold</option>
+                <option value="completed">Completed</option>
+              </select>
+            </div>
+          )}
         </div>
 
         {/* Legend */}
-        <div className="hidden xl:flex items-center gap-3 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+        <div
+          className="hidden lg:flex items-center gap-3 text-[11px]"
+          style={{ color: 'var(--text-secondary)' }}
+        >
           <span className="inline-flex items-center gap-1">
             <Diamond className="w-3 h-3 text-amber-500 fill-amber-500" aria-hidden="true" />
             Required-by
@@ -492,6 +513,12 @@ export function ProjectTimelineView() {
             Forecast late
           </span>
           <span className="inline-flex items-center gap-1">
+            <span className="px-1 rounded border border-dashed border-amber-500/70 text-[9px] text-amber-600 dark:text-amber-400 font-semibold">
+              TBD
+            </span>
+            Open role
+          </span>
+          <span className="inline-flex items-center gap-1">
             <span className="w-0.5 h-3 bg-red-500 inline-block" />
             Today
           </span>
@@ -499,8 +526,8 @@ export function ProjectTimelineView() {
       </div>
 
       {/* Interactive Dependency Linking Banner */}
-      {(linkingFrom || linkBannerError) && (
-        <div className="px-4 py-1.5 bg-blue-500/12 border-b border-blue-500/30 flex items-center justify-between text-xs">
+      {!isPresentationMode && (linkingFrom || linkBannerError) && (
+        <div className="px-4 py-1.5 bg-blue-500/12 border-b border-blue-500/30 flex items-center justify-between text-xs print:hidden">
           <div>
             {linkingFrom ? (
               <span>
@@ -535,7 +562,7 @@ export function ProjectTimelineView() {
             minHeight: '100%',
           }}
         >
-          {/* Sticky Top Header (Months + Weeks) */}
+          {/* Sticky Top Header */}
           <div
             className="sticky top-0 z-20 flex border-b"
             style={{
@@ -543,7 +570,6 @@ export function ProjectTimelineView() {
               borderColor: 'var(--border-default)',
             }}
           >
-            {/* Top-left corner */}
             <div
               className="sticky left-0 z-30 shrink-0 px-3 flex items-center justify-between border-r font-semibold text-xs"
               style={{
@@ -553,12 +579,13 @@ export function ProjectTimelineView() {
               }}
             >
               <span>Project / Phase</span>
-              <span className="text-[11px] font-normal" style={{ color: 'var(--text-muted)' }}>
-                Drag bars to reschedule
-              </span>
+              {!isPresentationMode && (
+                <span className="text-[11px] font-normal" style={{ color: 'var(--text-muted)' }}>
+                  Drag bars to reschedule
+                </span>
+              )}
             </div>
 
-            {/* Month + Week Columns */}
             <div style={{ width: totalWidth }}>
               <div
                 className="flex border-b text-[11px] font-semibold"
@@ -610,7 +637,6 @@ export function ProjectTimelineView() {
 
           {/* Rows + Canvas */}
           <div className="relative">
-            {/* Today Vertical Marker */}
             <div
               aria-hidden="true"
               className="pointer-events-none absolute top-0 bottom-0 z-10 w-0.5 bg-red-500/80"
@@ -686,7 +712,6 @@ export function ProjectTimelineView() {
               })}
             </svg>
 
-            {/* Row List */}
             {rows.map((row) => {
               const dates = previewRowDates(row);
               const metrics = computeScheduleMetrics({
@@ -702,18 +727,16 @@ export function ProjectTimelineView() {
               );
 
               const isSelected =
+                !isPresentationMode &&
                 selectedEntity?.type === row.entityType &&
                 selectedEntity?.id === row.id;
 
-              const reqByX = row.requiredBy
-                ? dateToX(row.requiredBy) + dayPx
-                : null;
+              const reqByX = row.requiredBy ? dateToX(row.requiredBy) + dayPx : null;
               const origEndX =
                 row.originalExpectedEnd && row.originalExpectedEnd !== dates.end
                   ? dateToX(row.originalExpectedEnd) + dayPx
                   : null;
 
-              // Late segment calculation
               const lateSegmentLeft =
                 row.requiredBy && dates.end > row.requiredBy
                   ? Math.max(barLeft, dateToX(row.requiredBy) + dayPx)
@@ -778,78 +801,89 @@ export function ProjectTimelineView() {
 
                       <button
                         type="button"
-                        onClick={() =>
+                        onClick={() => {
+                          if (isPresentationMode) return;
                           setSelectedEntity({
                             type: row.entityType,
                             id: row.id,
                             projectId: row.projectId,
-                          })
-                        }
-                        className={`truncate text-left cursor-pointer hover:underline ${
-                          row.entityType === 'project' ? 'font-semibold' : 'font-normal'
-                        }`}
+                          });
+                        }}
+                        className={`truncate text-left ${
+                          isPresentationMode ? '' : 'cursor-pointer hover:underline'
+                        } ${row.entityType === 'project' ? 'font-semibold' : 'font-normal'}`}
                       >
                         {row.name}
                       </button>
+
+                      {row.tbdCount > 0 && (
+                        <span
+                          title={`${row.tbdCount} unassigned TBD slot(s)`}
+                          className="px-1 py-0.2 rounded border border-dashed border-amber-500/70 bg-amber-500/12 text-[9px] font-semibold text-amber-700 dark:text-amber-300 shrink-0"
+                        >
+                          TBD
+                        </span>
+                      )}
                     </div>
 
-                    {/* Quick row actions */}
-                    <div className="flex items-center gap-1 opacity-75 group-hover:opacity-100 shrink-0">
-                      {row.entityType === 'project' && (
+                    {!isPresentationMode && (
+                      <div className="flex items-center gap-1 opacity-75 group-hover:opacity-100 shrink-0">
+                        {row.entityType === 'project' && (
+                          <button
+                            type="button"
+                            onClick={() => addTask(row.id)}
+                            title="Add phase/task"
+                            aria-label={`Add phase to ${row.name}`}
+                            className="p-1 rounded hover:bg-slate-500/15 cursor-pointer"
+                            style={{ color: 'var(--text-muted)' }}
+                          >
+                            <Plus className="w-3 h-3" aria-hidden="true" />
+                          </button>
+                        )}
                         <button
                           type="button"
-                          onClick={() => addTask(row.id)}
-                          title="Add phase/task"
-                          aria-label={`Add phase to ${row.name}`}
-                          className="p-1 rounded hover:bg-slate-500/15 cursor-pointer"
-                          style={{ color: 'var(--text-muted)' }}
-                        >
-                          <Plus className="w-3 h-3" aria-hidden="true" />
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setLinkBannerError(null);
-                          if (!linkingFrom) {
-                            setLinkingFrom({
-                              type: row.entityType,
-                              id: row.id,
-                              name: row.name,
-                            });
-                          } else {
-                            const res = addDependency({
-                              from_type: linkingFrom.type,
-                              from_id: linkingFrom.id,
-                              to_type: row.entityType,
-                              to_id: row.id,
-                            });
-                            setLinkingFrom(null);
-                            if (!res.ok) {
-                              setLinkBannerError(res.reason ?? 'Cannot link');
+                          onClick={() => {
+                            setLinkBannerError(null);
+                            if (!linkingFrom) {
+                              setLinkingFrom({
+                                type: row.entityType,
+                                id: row.id,
+                                name: row.name,
+                              });
+                            } else {
+                              const res = addDependency({
+                                from_type: linkingFrom.type,
+                                from_id: linkingFrom.id,
+                                to_type: row.entityType,
+                                to_id: row.id,
+                              });
+                              setLinkingFrom(null);
+                              if (!res.ok) {
+                                setLinkBannerError(res.reason ?? 'Cannot link');
+                              }
                             }
+                          }}
+                          title={
+                            linkingFrom
+                              ? `Finish link to ${row.name}`
+                              : `Link dependency from ${row.name}`
                           }
-                        }}
-                        title={
-                          linkingFrom
-                            ? `Finish link to ${row.name}`
-                            : `Link dependency from ${row.name}`
-                        }
-                        aria-label={`Dependency link for ${row.name}`}
-                        className={`p-1 rounded cursor-pointer ${
-                          linkingFrom?.id === row.id
-                            ? 'bg-blue-600 text-white'
-                            : 'hover:bg-slate-500/15'
-                        }`}
-                        style={
-                          linkingFrom?.id === row.id
-                            ? undefined
-                            : { color: 'var(--text-muted)' }
-                        }
-                      >
-                        <GitBranch className="w-3 h-3" aria-hidden="true" />
-                      </button>
-                    </div>
+                          aria-label={`Dependency link for ${row.name}`}
+                          className={`p-1 rounded cursor-pointer ${
+                            linkingFrom?.id === row.id
+                              ? 'bg-blue-600 text-white'
+                              : 'hover:bg-slate-500/15'
+                          }`}
+                          style={
+                            linkingFrom?.id === row.id
+                              ? undefined
+                              : { color: 'var(--text-muted)' }
+                          }
+                        >
+                          <GitBranch className="w-3 h-3" aria-hidden="true" />
+                        </button>
+                      </div>
+                    )}
                   </div>
 
                   {/* Timeline Row Canvas */}
@@ -857,7 +891,6 @@ export function ProjectTimelineView() {
                     className="relative"
                     style={{ width: totalWidth, height: ROW_HEIGHT }}
                   >
-                    {/* Subtle week column gridlines + weekend shading */}
                     <div className="absolute inset-0 flex pointer-events-none">
                       {weeks.map((w) => (
                         <div
@@ -876,7 +909,6 @@ export function ProjectTimelineView() {
                       ))}
                     </div>
 
-                    {/* Original Commitment Ghost Marker */}
                     {origEndX !== null && (
                       <div
                         title={`Original expected end: ${formatShortDate(row.originalExpectedEnd)}`}
@@ -885,7 +917,6 @@ export function ProjectTimelineView() {
                       />
                     )}
 
-                    {/* Required-by Diamond Marker */}
                     {reqByX !== null && (
                       <div
                         title={`Required by: ${formatShortDate(row.requiredBy)}`}
@@ -902,18 +933,19 @@ export function ProjectTimelineView() {
                       </div>
                     )}
 
-                    {/* Interactive Activity Bar */}
                     <div
                       role="button"
                       tabIndex={0}
-                      onClick={() =>
+                      onClick={() => {
+                        if (isPresentationMode) return;
                         setSelectedEntity({
                           type: row.entityType,
                           id: row.id,
                           projectId: row.projectId,
-                        })
-                      }
+                        });
+                      }}
                       onKeyDown={(e) => {
+                        if (isPresentationMode) return;
                         if (e.key === 'Enter' || e.key === ' ') {
                           e.preventDefault();
                           setSelectedEntity({
@@ -941,11 +973,12 @@ export function ProjectTimelineView() {
                         backgroundColor: `${row.color}30`,
                         borderColor: row.color,
                       }}
-                      className={`absolute z-15 rounded-md border overflow-hidden cursor-grab active:cursor-grabbing flex items-center transition-shadow ${
-                        metrics.isForecastLate ? 'ring-1 ring-red-500' : ''
-                      }`}
+                      className={`absolute z-15 rounded-md border overflow-hidden flex items-center transition-shadow ${
+                        isPresentationMode
+                          ? 'cursor-default'
+                          : 'cursor-grab active:cursor-grabbing'
+                      } ${metrics.isForecastLate ? 'ring-1 ring-red-500' : ''}`}
                     >
-                      {/* Progress Fill */}
                       <div
                         className="absolute inset-y-0 left-0 pointer-events-none"
                         style={{
@@ -955,7 +988,6 @@ export function ProjectTimelineView() {
                         }}
                       />
 
-                      {/* Late Overrun Hatched Overlay */}
                       {lateSegmentLeft !== null && lateSegmentWidth > 0 && (
                         <div
                           className="absolute inset-y-0 right-0 bg-hatched-late pointer-events-none"
@@ -963,15 +995,15 @@ export function ProjectTimelineView() {
                         />
                       )}
 
-                      {/* Left Resize Handle */}
-                      <div
-                        onPointerDown={(e) =>
-                          startBarPointerDrag(e, row, 'resize-start')
-                        }
-                        className="absolute left-0 inset-y-0 w-2 cursor-ew-resize hover:bg-white/40 z-20"
-                      />
+                      {!isPresentationMode && (
+                        <div
+                          onPointerDown={(e) =>
+                            startBarPointerDrag(e, row, 'resize-start')
+                          }
+                          className="absolute left-0 inset-y-0 w-2 cursor-ew-resize hover:bg-white/40 z-20"
+                        />
+                      )}
 
-                      {/* Bar Label */}
                       <div className="relative z-10 px-2 flex items-center justify-between w-full gap-1 text-[11px] font-semibold truncate pointer-events-none">
                         <span
                           className="truncate drop-shadow-[0_1px_1px_rgba(0,0,0,0.25)]"
@@ -989,16 +1021,16 @@ export function ProjectTimelineView() {
                         </span>
                       </div>
 
-                      {/* Right Resize Handle */}
-                      <div
-                        onPointerDown={(e) =>
-                          startBarPointerDrag(e, row, 'resize-end')
-                        }
-                        className="absolute right-0 inset-y-0 w-2 cursor-ew-resize hover:bg-white/40 z-20"
-                      />
+                      {!isPresentationMode && (
+                        <div
+                          onPointerDown={(e) =>
+                            startBarPointerDrag(e, row, 'resize-end')
+                          }
+                          className="absolute right-0 inset-y-0 w-2 cursor-ew-resize hover:bg-white/40 z-20"
+                        />
+                      )}
                     </div>
 
-                    {/* Live Drag Tooltip */}
                     {dragState?.rowKey === row.key && dragState.deltaWorkingDays !== 0 && (
                       <div
                         className="absolute -top-6 z-30 px-2 py-0.5 rounded bg-slate-900 text-white text-[10px] font-medium whitespace-nowrap pointer-events-none shadow"

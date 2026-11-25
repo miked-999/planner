@@ -2,10 +2,12 @@ import React, { useEffect, useState } from 'react';
 import {
   BarChart3,
   CalendarRange,
+  Camera,
   Check,
   ChevronLeft,
   ChevronRight,
   DatabaseBackup,
+  Eye,
   FlaskConical,
   GanttChart,
   LayoutDashboard,
@@ -19,6 +21,7 @@ import {
   Users,
   X,
 } from 'lucide-react';
+import { formatMediumDate } from '../../engine/dates';
 import { type AppView, usePlan } from '../../store/PlanContext';
 
 function ThemeToggleButton() {
@@ -102,6 +105,7 @@ const NAV_ITEMS: { id: AppView; label: string; icon: React.ComponentType<{ class
 export function AppShell({ children }: { children: React.ReactNode }) {
   const {
     plan,
+    todayIso,
     activeView,
     setActiveView,
     saveStatus,
@@ -118,138 +122,258 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     applyWhatIfChanges,
     discardWhatIfChanges,
     createProject,
+    setSelectedEntity,
     setTeamDrawerOpen,
     setPortabilityModalOpen,
+    snapshotModalOpen,
+    setSnapshotModalOpen,
+    isPresentationMode,
+    setIsPresentationMode,
   } = usePlan();
 
   const [collapsed, setCollapsed] = useState(false);
 
+  // Allow pressing Escape to exit Presentation Mode when no modal is open
+  useEffect(() => {
+    if (!isPresentationMode || snapshotModalOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsPresentationMode(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isPresentationMode, snapshotModalOpen, setIsPresentationMode]);
+
   return (
     <div className="h-screen flex flex-col overflow-hidden">
-      {/* Top Header Bar */}
-      <header
-        className="h-14 shrink-0 flex items-center justify-between px-4 border-b gap-3"
-        style={{
-          backgroundColor: 'var(--bg-surface)',
-          borderColor: 'var(--border-default)',
-        }}
-      >
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="w-8 h-8 rounded-lg bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-xs">
-            <CalendarRange className="w-4 h-4" aria-hidden="true" />
+      {/* Stakeholder Presentation Mode Header */}
+      {isPresentationMode ? (
+        <header
+          className="h-14 shrink-0 flex items-center justify-between px-5 border-b gap-4 print:hidden"
+          style={{
+            backgroundColor: 'var(--bg-surface)',
+            borderColor: 'var(--border-default)',
+          }}
+        >
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-8 h-8 rounded-lg bg-blue-600 text-white flex items-center justify-center shrink-0">
+              <Eye className="w-4 h-4" aria-hidden="true" />
+            </div>
+            <div className="truncate">
+              <span className="font-semibold text-sm">Project &amp; Resource Plan</span>
+              <span
+                className="ml-2.5 text-xs"
+                style={{ color: 'var(--text-secondary)' }}
+              >
+                Read-only Stakeholder View · {formatMediumDate(todayIso)}
+              </span>
+            </div>
           </div>
-          <div className="truncate">
-            <span className="font-semibold text-sm tracking-tight">Project Planner</span>
-            <span
-              className="hidden sm:inline-block ml-2 text-xs px-2 py-0.5 rounded-full"
-              style={{
-                backgroundColor: 'var(--bg-subtle)',
-                color: 'var(--text-secondary)',
-              }}
+
+          {/* Inline View Switcher Pills */}
+          <nav aria-label="Presentation views" className="hidden md:flex items-center gap-1 p-1 rounded-lg border" style={{ borderColor: 'var(--border-default)', backgroundColor: 'var(--bg-subtle)' }}>
+            {NAV_ITEMS.map((item) => {
+              const active = activeView === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => setActiveView(item.id)}
+                  className={`px-2.5 py-1 rounded-md text-xs font-medium cursor-pointer transition-colors ${
+                    active ? 'bg-blue-600 text-white shadow-2xs' : 'hover:opacity-85'
+                  }`}
+                >
+                  {item.label}
+                </button>
+              );
+            })}
+          </nav>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setSnapshotModalOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white cursor-pointer"
             >
-              {plan.projects.length} projects · {plan.people.length} people
+              <Camera className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>Export PNG / PDF</span>
+            </button>
+            <ThemeToggleButton />
+            <button
+              type="button"
+              onClick={() => setIsPresentationMode(false)}
+              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium border cursor-pointer hover:opacity-85"
+              style={{ borderColor: 'var(--border-default)' }}
+            >
+              <X className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>Exit</span>
+            </button>
+          </div>
+        </header>
+      ) : (
+        /* Standard Planning Top Header Bar */
+        <header
+          className="h-14 shrink-0 flex items-center justify-between px-4 border-b gap-3 print:hidden"
+          style={{
+            backgroundColor: 'var(--bg-surface)',
+            borderColor: 'var(--border-default)',
+          }}
+        >
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-8 h-8 rounded-lg bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+              <CalendarRange className="w-4 h-4" aria-hidden="true" />
+            </div>
+            <div className="truncate">
+              <span className="font-semibold text-sm tracking-tight">Project Planner</span>
+              <span
+                className="hidden sm:inline-block ml-2 text-xs px-2 py-0.5 rounded-full"
+                style={{
+                  backgroundColor: 'var(--bg-subtle)',
+                  color: 'var(--text-secondary)',
+                }}
+              >
+                {plan.projects.length} projects · {plan.people.length} people
+              </span>
+            </div>
+
+            <span
+              className="text-xs ml-2 hidden lg:inline-block"
+              style={{ color: 'var(--text-muted)' }}
+            >
+              {isWhatIfMode
+                ? 'Sandbox (DB paused)'
+                : saveStatus === 'saving'
+                  ? 'Saving…'
+                  : saveStatus === 'error'
+                    ? 'Save error'
+                    : 'Saved locally'}
             </span>
           </div>
 
-          <span className="text-xs ml-2 hidden md:inline-block" style={{ color: 'var(--text-muted)' }}>
-            {isWhatIfMode
-              ? 'Sandbox (DB paused)'
-              : saveStatus === 'saving'
-                ? 'Saving…'
-                : saveStatus === 'error'
-                  ? 'Save error'
-                  : 'Saved locally'}
-          </span>
-        </div>
-
-        {/* Right Controls */}
-        <div className="flex items-center gap-2">
-          {/* Undo / Redo */}
-          <div
-            className="flex items-center rounded-lg border overflow-hidden"
-            style={{ borderColor: 'var(--border-default)' }}
-          >
-            <button
-              type="button"
-              onClick={undo}
-              disabled={!canUndo}
-              title="Undo (Cmd/Ctrl+Z)"
-              aria-label="Undo"
-              className="p-2 disabled:opacity-35 hover:opacity-80 cursor-pointer disabled:cursor-default"
-              style={{ color: 'var(--text-secondary)' }}
+          <div className="flex items-center gap-2">
+            {/* Undo / Redo */}
+            <div
+              className="flex items-center rounded-lg border overflow-hidden"
+              style={{ borderColor: 'var(--border-default)' }}
             >
-              <Undo2 className="w-4 h-4" aria-hidden="true" />
-            </button>
+              <button
+                type="button"
+                onClick={undo}
+                disabled={!canUndo}
+                title="Undo (Cmd/Ctrl+Z)"
+                aria-label="Undo"
+                className="p-2 disabled:opacity-35 hover:opacity-80 cursor-pointer disabled:cursor-default"
+                style={{ color: 'var(--text-secondary)' }}
+              >
+                <Undo2 className="w-4 h-4" aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                onClick={redo}
+                disabled={!canRedo}
+                title="Redo (Cmd/Ctrl+Shift+Z)"
+                aria-label="Redo"
+                className="p-2 border-l disabled:opacity-35 hover:opacity-80 cursor-pointer disabled:cursor-default"
+                style={{
+                  borderColor: 'var(--border-default)',
+                  color: 'var(--text-secondary)',
+                }}
+              >
+                <Redo2 className="w-4 h-4" aria-hidden="true" />
+              </button>
+            </div>
+
+            {/* What-if Mode Toggle */}
+            {!isWhatIfMode ? (
+              <button
+                type="button"
+                onClick={enterWhatIfMode}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors cursor-pointer hover:border-amber-500/60"
+                style={{
+                  borderColor: 'var(--border-default)',
+                  backgroundColor: 'var(--bg-subtle)',
+                  color: 'var(--text-primary)',
+                }}
+              >
+                <FlaskConical className="w-3.5 h-3.5 text-amber-500" aria-hidden="true" />
+                <span className="hidden md:inline">What-if Mode</span>
+              </button>
+            ) : (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/35">
+                <FlaskConical className="w-3.5 h-3.5" aria-hidden="true" />
+                What-if Active
+              </span>
+            )}
+
+            {/* Presentation Mode */}
             <button
               type="button"
-              onClick={redo}
-              disabled={!canRedo}
-              title="Redo (Cmd/Ctrl+Shift+Z)"
-              aria-label="Redo"
-              className="p-2 border-l disabled:opacity-35 hover:opacity-80 cursor-pointer disabled:cursor-default"
-              style={{
-                borderColor: 'var(--border-default)',
-                color: 'var(--text-secondary)',
+              onClick={() => {
+                setSelectedEntity(null);
+                setIsPresentationMode(true);
               }}
-            >
-              <Redo2 className="w-4 h-4" aria-hidden="true" />
-            </button>
-          </div>
-
-          {/* What-if Mode Toggle */}
-          {!isWhatIfMode ? (
-            <button
-              type="button"
-              onClick={enterWhatIfMode}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors cursor-pointer hover:border-amber-500/60"
+              title="Clean read-only Stakeholder Presentation Mode"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border cursor-pointer hover:opacity-85"
               style={{
                 borderColor: 'var(--border-default)',
-                backgroundColor: 'var(--bg-subtle)',
+                backgroundColor: 'var(--bg-surface)',
                 color: 'var(--text-primary)',
               }}
             >
-              <FlaskConical className="w-3.5 h-3.5 text-amber-500" aria-hidden="true" />
-              <span>What-if Mode</span>
+              <Eye className="w-3.5 h-3.5" aria-hidden="true" />
+              <span className="hidden xl:inline">Present</span>
             </button>
-          ) : (
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/35">
-              <FlaskConical className="w-3.5 h-3.5" aria-hidden="true" />
-              What-if Active
-            </span>
-          )}
 
-          {/* New Project */}
-          <button
-            type="button"
-            onClick={() => createProject()}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white shadow-xs transition-colors cursor-pointer"
-          >
-            <Plus className="w-3.5 h-3.5" aria-hidden="true" />
-            <span>New Project</span>
-          </button>
+            {/* Snapshot Export (PNG / PDF) */}
+            <button
+              type="button"
+              onClick={() => setSnapshotModalOpen(true)}
+              title="Export PNG or Landscape PDF Snapshot"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border cursor-pointer hover:opacity-85"
+              style={{
+                borderColor: 'var(--border-default)',
+                backgroundColor: 'var(--bg-surface)',
+                color: 'var(--text-primary)',
+              }}
+            >
+              <Camera className="w-3.5 h-3.5" aria-hidden="true" />
+              <span className="hidden lg:inline">Snapshot</span>
+            </button>
 
-          {/* Data / Export / Backup */}
-          <button
-            type="button"
-            onClick={() => setPortabilityModalOpen(true)}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border cursor-pointer hover:opacity-85"
-            style={{
-              borderColor: 'var(--border-default)',
-              backgroundColor: 'var(--bg-surface)',
-              color: 'var(--text-primary)',
-            }}
-          >
-            <DatabaseBackup className="w-3.5 h-3.5" aria-hidden="true" />
-            <span className="hidden sm:inline">Import / Export</span>
-          </button>
+            {/* New Project */}
+            <button
+              type="button"
+              onClick={() => createProject()}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white shadow-xs transition-colors cursor-pointer"
+            >
+              <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>New Project</span>
+            </button>
 
-          <ThemeToggleButton />
-        </div>
-      </header>
+            {/* Data / Export / Backup */}
+            <button
+              type="button"
+              onClick={() => setPortabilityModalOpen(true)}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border cursor-pointer hover:opacity-85"
+              style={{
+                borderColor: 'var(--border-default)',
+                backgroundColor: 'var(--bg-surface)',
+                color: 'var(--text-primary)',
+              }}
+            >
+              <DatabaseBackup className="w-3.5 h-3.5" aria-hidden="true" />
+              <span className="hidden xl:inline">Data</span>
+            </button>
+
+            <ThemeToggleButton />
+          </div>
+        </header>
+      )}
 
       {/* What-if Active Sandbox Banner */}
-      {isWhatIfMode && (
-        <div className="shrink-0 bg-amber-500/14 border-b border-amber-500/35 px-4 py-2 flex flex-wrap items-center justify-between gap-3">
+      {isWhatIfMode && !isPresentationMode && (
+        <div className="shrink-0 bg-amber-500/14 border-b border-amber-500/35 px-4 py-2 flex flex-wrap items-center justify-between gap-3 print:hidden">
           <div className="flex items-center gap-3 text-xs">
             <span className="font-semibold text-amber-700 dark:text-amber-300 flex items-center gap-1.5">
               <FlaskConical className="w-4 h-4" aria-hidden="true" />
@@ -314,7 +438,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
       {/* Error Toast Strip */}
       {errorMessage && (
-        <div className="shrink-0 bg-red-500/15 border-b border-red-500/30 px-4 py-2 flex items-center justify-between text-xs text-red-600 dark:text-red-400">
+        <div className="shrink-0 bg-red-500/15 border-b border-red-500/30 px-4 py-2 flex items-center justify-between text-xs text-red-600 dark:text-red-400 print:hidden">
           <span>{errorMessage}</span>
           <button type="button" onClick={clearError} className="underline cursor-pointer">
             Dismiss
@@ -324,74 +448,76 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
       {/* Body: Sidebar + Main Workspace */}
       <div className="flex-1 flex min-h-0">
-        <aside
-          className={`shrink-0 border-r flex flex-col justify-between transition-[width] duration-150 ${
-            collapsed ? 'w-14' : 'w-52'
-          }`}
-          style={{
-            backgroundColor: 'var(--bg-surface)',
-            borderColor: 'var(--border-default)',
-          }}
-        >
-          <nav aria-label="Main views" className="p-2 space-y-1">
-            {NAV_ITEMS.map((item) => {
-              const Icon = item.icon;
-              const active = activeView === item.id;
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => setActiveView(item.id)}
-                  title={collapsed ? item.label : undefined}
-                  className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
-                    active
-                      ? 'bg-blue-600 text-white shadow-2xs'
-                      : 'hover:bg-slate-500/10'
-                  }`}
-                  style={active ? undefined : { color: 'var(--text-secondary)' }}
-                >
-                  <Icon className="w-4 h-4 shrink-0" aria-hidden="true" />
-                  {!collapsed && <span className="truncate">{item.label}</span>}
-                </button>
-              );
-            })}
+        {!isPresentationMode && (
+          <aside
+            className={`shrink-0 border-r flex flex-col justify-between transition-[width] duration-150 print:hidden ${
+              collapsed ? 'w-14' : 'w-52'
+            }`}
+            style={{
+              backgroundColor: 'var(--bg-surface)',
+              borderColor: 'var(--border-default)',
+            }}
+          >
+            <nav aria-label="Main views" className="p-2 space-y-1">
+              {NAV_ITEMS.map((item) => {
+                const Icon = item.icon;
+                const active = activeView === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => setActiveView(item.id)}
+                    title={collapsed ? item.label : undefined}
+                    className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+                      active
+                        ? 'bg-blue-600 text-white shadow-2xs'
+                        : 'hover:bg-slate-500/10'
+                    }`}
+                    style={active ? undefined : { color: 'var(--text-secondary)' }}
+                  >
+                    <Icon className="w-4 h-4 shrink-0" aria-hidden="true" />
+                    {!collapsed && <span className="truncate">{item.label}</span>}
+                  </button>
+                );
+              })}
 
-            <div
-              className="my-2 border-t pt-2"
-              style={{ borderColor: 'var(--border-default)' }}
-            >
+              <div
+                className="my-2 border-t pt-2"
+                style={{ borderColor: 'var(--border-default)' }}
+              >
+                <button
+                  type="button"
+                  onClick={() => setTeamDrawerOpen(true)}
+                  title={collapsed ? 'Manage Team & Leave' : undefined}
+                  className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs font-medium hover:bg-slate-500/10 cursor-pointer"
+                  style={{ color: 'var(--text-secondary)' }}
+                >
+                  <UserCog className="w-4 h-4 shrink-0" aria-hidden="true" />
+                  {!collapsed && <span className="truncate">Team &amp; Leave</span>}
+                </button>
+              </div>
+            </nav>
+
+            <div className="p-2 border-t" style={{ borderColor: 'var(--border-default)' }}>
               <button
                 type="button"
-                onClick={() => setTeamDrawerOpen(true)}
-                title={collapsed ? 'Manage Team & Leave' : undefined}
-                className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs font-medium hover:bg-slate-500/10 cursor-pointer"
-                style={{ color: 'var(--text-secondary)' }}
+                onClick={() => setCollapsed((c) => !c)}
+                aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-md text-xs hover:bg-slate-500/10 cursor-pointer"
+                style={{ color: 'var(--text-muted)' }}
               >
-                <UserCog className="w-4 h-4 shrink-0" aria-hidden="true" />
-                {!collapsed && <span className="truncate">Team &amp; Leave</span>}
+                {collapsed ? (
+                  <ChevronRight className="w-4 h-4" aria-hidden="true" />
+                ) : (
+                  <>
+                    <ChevronLeft className="w-4 h-4" aria-hidden="true" />
+                    <span>Collapse</span>
+                  </>
+                )}
               </button>
             </div>
-          </nav>
-
-          <div className="p-2 border-t" style={{ borderColor: 'var(--border-default)' }}>
-            <button
-              type="button"
-              onClick={() => setCollapsed((c) => !c)}
-              aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-              className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-md text-xs hover:bg-slate-500/10 cursor-pointer"
-              style={{ color: 'var(--text-muted)' }}
-            >
-              {collapsed ? (
-                <ChevronRight className="w-4 h-4" aria-hidden="true" />
-              ) : (
-                <>
-                  <ChevronLeft className="w-4 h-4" aria-hidden="true" />
-                  <span>Collapse</span>
-                </>
-              )}
-            </button>
-          </div>
-        </aside>
+          </aside>
+        )}
 
         <main className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">
           {children}

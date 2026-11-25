@@ -1,6 +1,7 @@
 import { CascadePreviewModal } from './components/dialogs/CascadePreviewModal';
 import { EntityDrawer } from './components/dialogs/EntityDrawer';
 import { PortabilityModal } from './components/dialogs/PortabilityModal';
+import { SnapshotModal } from './components/dialogs/SnapshotModal';
 import { TeamDrawerModal } from './components/dialogs/TeamDrawerModal';
 import { AppShell } from './components/layout/AppShell';
 import { PlanProvider, usePlan } from './store/PlanContext';
@@ -29,6 +30,7 @@ function WorkspaceContent() {
       <CascadePreviewModal />
       <TeamDrawerModal />
       <PortabilityModal />
+      <SnapshotModal />
     </AppShell>
   );
 }

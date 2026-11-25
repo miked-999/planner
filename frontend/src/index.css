@@ -149,3 +149,15 @@ dialog::backdrop {
     rgba(185, 28, 28, 0.95) 10px
   );
 }
+
+@media print {
+  @page {
+    size: landscape;
+    margin: 10mm;
+  }
+  body {
+    background: #ffffff !important;
+    color: #0f172a !important;
+  }
+}
+

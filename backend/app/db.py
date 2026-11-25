@@ -85,7 +85,8 @@ CREATE TABLE IF NOT EXISTS tasks (
 
 CREATE TABLE IF NOT EXISTS assignments (
     id TEXT PRIMARY KEY,
-    person_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    person_id TEXT REFERENCES people(id) ON DELETE CASCADE,
+    placeholder_label TEXT,
     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
     allocation_pct INTEGER,
@@ -126,8 +127,40 @@ def init_db(db_path: Path | None = None) -> None:
     try:
         with conn:
             conn.executescript(SCHEMA_SQL)
+            # Migrate older v1 assignments table (where person_id was NOT NULL or placeholder_label missing)
+            cols = conn.execute("PRAGMA table_info(assignments)").fetchall()
+            col_names = {row["name"] for row in cols}
+            person_col = next((row for row in cols if row["name"] == "person_id"), None)
+            needs_rebuild = (
+                "placeholder_label" not in col_names
+                or (person_col is not None and person_col["notnull"] == 1)
+            )
+            if needs_rebuild and cols:
+                has_placeholder = "placeholder_label" in col_names
+                select_placeholder = "placeholder_label" if has_placeholder else "NULL"
+                conn.executescript(
+                    f"""
+                    CREATE TABLE assignments_v2 (
+                        id TEXT PRIMARY KEY,
+                        person_id TEXT REFERENCES people(id) ON DELETE CASCADE,
+                        placeholder_label TEXT,
+                        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                        task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+                        allocation_pct INTEGER,
+                        start_date TEXT,
+                        end_date TEXT
+                    );
+                    INSERT INTO assignments_v2 (
+                        id, person_id, placeholder_label, project_id, task_id, allocation_pct, start_date, end_date
+                    )
+                    SELECT id, person_id, {select_placeholder}, project_id, task_id, allocation_pct, start_date, end_date
+                    FROM assignments;
+                    DROP TABLE assignments;
+                    ALTER TABLE assignments_v2 RENAME TO assignments;
+                    """
+                )
             conn.execute(
-                "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '1')"
+                "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '2')"
             )
     finally:
         conn.close()
@@ -265,13 +298,14 @@ def write_plan(plan: PlanDocument, db_path: Path | None = None) -> PlanDocument:
             conn.executemany(
                 """
                 INSERT INTO assignments (
-                    id, person_id, project_id, task_id, allocation_pct, start_date, end_date
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    id, person_id, placeholder_label, project_id, task_id, allocation_pct, start_date, end_date
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
                         a.id,
                         a.person_id,
+                        a.placeholder_label,
                         a.project_id,
                         a.task_id,
                         a.allocation_pct,

@@ -1,6 +1,7 @@
 import type {
   AllocationBreakdownItem,
   Assignment,
+  CandidateFitResult,
   PersonAvailability,
   PlanDocument,
   Project,
@@ -8,7 +9,7 @@ import type {
   WeekBucket,
   WeeklyCellCapacity,
 } from '../types/plan';
-import { addWorkingDays, isWorkingDay, snapToWorkingDay } from './dates';
+import { addCalendarDays, addWorkingDays, generateWeeks, isWorkingDay, snapToWorkingDay } from './dates';
 
 export function resolveAssignmentWindow(
   assignment: Assignment,
@@ -219,4 +220,163 @@ export function computePersonAvailability(
     isAvailableNow: false,
     currentWeekPct,
   };
+}
+
+/**
+ * Computes weekly unstaffed TBD demand across all placeholder assignments (person_id === null).
+ */
+export function computeTbdWeeklyDemand(
+  plan: PlanDocument,
+  weeks: WeekBucket[],
+): Map<string, WeeklyCellCapacity> {
+  const projectMap = new Map(plan.projects.map((p) => [p.id, p]));
+  const taskMap = new Map(plan.tasks.map((t) => [t.id, t]));
+  const placeholders = plan.assignments.filter((a) => !a.person_id);
+  const row = new Map<string, WeeklyCellCapacity>();
+
+  for (const week of weeks) {
+    let sumPct = 0;
+    let peakDailyPct = 0;
+    const itemAgg = new Map<string, { base: AllocationBreakdownItem; days: number }>();
+
+    for (const day of week.workingDays) {
+      let dayTotal = 0;
+      for (const asg of placeholders) {
+        const proj = projectMap.get(asg.project_id);
+        const task = asg.task_id ? taskMap.get(asg.task_id) : undefined;
+        if (!isItemActiveForCapacity(proj)) continue;
+        if (asg.task_id && !isItemActiveForCapacity(task)) continue;
+        const win = resolveAssignmentWindow(asg, proj, task);
+        if (!win || day < win.start || day > win.end) continue;
+
+        const pct = asg.allocation_pct ?? 100;
+        dayTotal += pct;
+        const existing = itemAgg.get(asg.id);
+        if (existing) {
+          existing.days += 1;
+        } else {
+          itemAgg.set(asg.id, {
+            base: {
+              id: asg.id,
+              kind: 'assignment',
+              projectId: proj!.id,
+              taskId: asg.task_id,
+              label: `${asg.placeholder_label || 'TBD'} · ${proj!.name}`,
+              sublabel: task?.name,
+              color: proj!.color,
+              allocationPct: pct,
+              isImplicitDefault: asg.allocation_pct === null,
+              activeDaysInPeriod: 1,
+            },
+            days: 1,
+          });
+        }
+      }
+      sumPct += dayTotal;
+      if (dayTotal > peakDailyPct) peakDailyPct = dayTotal;
+    }
+
+    const weeklyPct = Math.round(sumPct / 5);
+    row.set(week.weekStart, {
+      personId: '__tbd__',
+      weekStart: week.weekStart,
+      weeklyPct,
+      peakDailyPct,
+      hasDailySpike: false,
+      level: weeklyPct > 0 ? 'partial' : 'free',
+      items: Array.from(itemAgg.values()).map((x) => ({
+        ...x.base,
+        activeDaysInPeriod: x.days,
+      })),
+    });
+  }
+
+  return row;
+}
+
+/**
+ * Evaluates and ranks every team member by how cleanly they can absorb `neededPct`
+ * during `[startIso, endIso]` ("Who fits?" matcher for TBD slots).
+ */
+export function rankPeopleForSlot(
+  plan: PlanDocument,
+  startIso: string,
+  endIso: string,
+  neededPct: number,
+): CandidateFitResult[] {
+  const effectiveEnd = endIso < startIso ? startIso : endIso;
+  const workingDays: string[] = [];
+  let cur = startIso;
+  while (cur <= effectiveEnd) {
+    if (isWorkingDay(cur)) workingDays.push(cur);
+    cur = addCalendarDays(cur, 1);
+  }
+  if (workingDays.length === 0) {
+    workingDays.push(snapToWorkingDay(startIso, 'forward'));
+  }
+
+  const weeks = generateWeeks(workingDays[0], workingDays[workingDays.length - 1]);
+  const daySet = new Set(workingDays);
+
+  const results: CandidateFitResult[] = plan.people.map((person) => {
+    let sumCurrent = 0;
+    let conflictDaysCount = 0;
+
+    for (const d of workingDays) {
+      const daily = computePersonDailyAllocation(plan, person.id, d).totalPct;
+      sumCurrent += daily;
+      if (daily + neededPct > 100) {
+        conflictDaysCount += 1;
+      }
+    }
+
+    let peakWeeklyAfterPct = 0;
+    for (const w of weeks) {
+      let weekSumAfter = 0;
+      for (const wd of w.workingDays) {
+        const base = computePersonDailyAllocation(plan, person.id, wd).totalPct;
+        const added = daySet.has(wd) ? neededPct : 0;
+        weekSumAfter += base + added;
+      }
+      const wkAfter = Math.round(weekSumAfter / 5);
+      if (wkAfter > peakWeeklyAfterPct) peakWeeklyAfterPct = wkAfter;
+    }
+
+    const avgCurrentPct = Math.round(sumCurrent / workingDays.length);
+    const avgFreePct = Math.max(0, 100 - avgCurrentPct);
+
+    let fitStatus: CandidateFitResult['fitStatus'] = 'conflict';
+    if (peakWeeklyAfterPct <= 100 && conflictDaysCount === 0) {
+      fitStatus = 'full';
+    } else if (peakWeeklyAfterPct <= 100 || avgCurrentPct + neededPct <= 100) {
+      fitStatus = 'partial';
+    }
+
+    return {
+      personId: person.id,
+      personName: person.name,
+      avgCurrentPct,
+      avgFreePct,
+      peakWeeklyAfterPct,
+      conflictDaysCount,
+      totalWorkingDays: workingDays.length,
+      fitStatus,
+    };
+  });
+
+  const statusOrder: Record<CandidateFitResult['fitStatus'], number> = {
+    full: 0,
+    partial: 1,
+    conflict: 2,
+  };
+
+  return results.sort((a, b) => {
+    if (statusOrder[a.fitStatus] !== statusOrder[b.fitStatus]) {
+      return statusOrder[a.fitStatus] - statusOrder[b.fitStatus];
+    }
+    if (a.peakWeeklyAfterPct !== b.peakWeeklyAfterPct) {
+      return a.peakWeeklyAfterPct - b.peakWeeklyAfterPct;
+    }
+    return b.avgFreePct - a.avgFreePct;
+  });
 }

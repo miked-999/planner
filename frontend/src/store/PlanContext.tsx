@@ -81,6 +81,10 @@ interface PlanContextValue {
   setTeamDrawerOpen: (open: boolean) => void;
   portabilityModalOpen: boolean;
   setPortabilityModalOpen: (open: boolean) => void;
+  snapshotModalOpen: boolean;
+  setSnapshotModalOpen: (open: boolean) => void;
+  isPresentationMode: boolean;
+  setIsPresentationMode: (active: boolean) => void;
 
   // Undo / Redo
   canUndo: boolean;
@@ -125,6 +129,7 @@ interface PlanContextValue {
   upsertAssignment: (
     assignment: Omit<Assignment, 'id'> & { id?: string },
   ) => void;
+  assignPersonToPlaceholder: (assignmentId: string, personId: string) => void;
   removeAssignment: (assignmentId: string) => void;
 
   addUnavailability: (entry: Omit<Unavailability, 'id'>) => void;
@@ -173,6 +178,8 @@ export function PlanProvider({ children }: { children: React.ReactNode }) {
   const [selectedEntity, setSelectedEntity] = useState<SelectedEntity | null>(null);
   const [teamDrawerOpen, setTeamDrawerOpen] = useState(false);
   const [portabilityModalOpen, setPortabilityModalOpen] = useState(false);
+  const [snapshotModalOpen, setSnapshotModalOpen] = useState(false);
+  const [isPresentationMode, setIsPresentationMode] = useState(false);
   const [pendingCascade, setPendingCascade] = useState<CascadePreview | null>(null);
 
   const todayIso = useMemo(() => todayIsoLocal(), []);
@@ -709,12 +716,15 @@ export function PlanProvider({ children }: { children: React.ReactNode }) {
         });
         return;
       }
-      const existing = plan.assignments.find(
-        (a) =>
-          a.person_id === input.person_id &&
-          a.project_id === input.project_id &&
-          (a.task_id ?? null) === (input.task_id ?? null),
-      );
+      // Only deduplicate named person assignments; allow multiple distinct TBD slots on a project
+      const existing = input.person_id
+        ? plan.assignments.find(
+            (a) =>
+              a.person_id === input.person_id &&
+              a.project_id === input.project_id &&
+              (a.task_id ?? null) === (input.task_id ?? null),
+          )
+        : undefined;
       if (existing) {
         commitPlan({
           ...plan,
@@ -729,7 +739,10 @@ export function PlanProvider({ children }: { children: React.ReactNode }) {
             ...plan.assignments,
             {
               id: uid('asg'),
-              person_id: input.person_id,
+              person_id: input.person_id ?? null,
+              placeholder_label: input.person_id
+                ? null
+                : input.placeholder_label?.trim() || 'TBD',
               project_id: input.project_id,
               task_id: input.task_id ?? null,
               allocation_pct: input.allocation_pct,
@@ -739,6 +752,22 @@ export function PlanProvider({ children }: { children: React.ReactNode }) {
           ],
         });
       }
+    },
+    [plan, commitPlan],
+  );
+
+  const assignPersonToPlaceholder = useCallback(
+    (assignmentId: string, personId: string) => {
+      const target = plan.assignments.find((a) => a.id === assignmentId);
+      if (!target) return;
+      commitPlan({
+        ...plan,
+        assignments: plan.assignments.map((a) =>
+          a.id === assignmentId
+            ? { ...a, person_id: personId, placeholder_label: null }
+            : a,
+        ),
+      });
     },
     [plan, commitPlan],
   );
@@ -828,6 +857,10 @@ export function PlanProvider({ children }: { children: React.ReactNode }) {
       setTeamDrawerOpen,
       portabilityModalOpen,
       setPortabilityModalOpen,
+      snapshotModalOpen,
+      setSnapshotModalOpen,
+      isPresentationMode,
+      setIsPresentationMode,
       canUndo,
       canRedo,
       undo,
@@ -858,6 +891,7 @@ export function PlanProvider({ children }: { children: React.ReactNode }) {
       renamePerson,
       removePerson,
       upsertAssignment,
+      assignPersonToPlaceholder,
       removeAssignment,
       addUnavailability,
       removeUnavailability,
@@ -874,6 +908,8 @@ export function PlanProvider({ children }: { children: React.ReactNode }) {
       selectedEntity,
       teamDrawerOpen,
       portabilityModalOpen,
+      snapshotModalOpen,
+      isPresentationMode,
       canUndo,
       canRedo,
       undo,
@@ -904,6 +940,7 @@ export function PlanProvider({ children }: { children: React.ReactNode }) {
       renamePerson,
       removePerson,
       upsertAssignment,
+      assignPersonToPlaceholder,
       removeAssignment,
       addUnavailability,
       removeUnavailability,

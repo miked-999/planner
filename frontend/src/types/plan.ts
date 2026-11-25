@@ -57,12 +57,24 @@ export interface Task {
 
 export interface Assignment {
   id: string;
-  person_id: string;
+  person_id: string | null;
+  placeholder_label?: string | null;
   project_id: string;
   task_id: string | null;
   allocation_pct: number | null;
   start_date: string | null;
   end_date: string | null;
+}
+
+export interface CandidateFitResult {
+  personId: string;
+  personName: string;
+  avgCurrentPct: number;
+  avgFreePct: number;
+  peakWeeklyAfterPct: number;
+  conflictDaysCount: number;
+  totalWorkingDays: number;
+  fitStatus: 'full' | 'partial' | 'conflict';
 }
 
 export interface Dependency {

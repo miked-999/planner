@@ -6,10 +6,14 @@ import {
   Layers,
   Plus,
   RotateCcw,
+  Sparkles,
   Trash2,
+  UserCheck,
+  UserPlus,
   Users,
   X,
 } from 'lucide-react';
+import { rankPeopleForSlot, resolveAssignmentWindow } from '../../engine/capacity';
 import {
   formatDurationLabel,
   formatMediumDate,
@@ -36,6 +40,7 @@ export function EntityDrawer() {
     plan,
     selectedEntity,
     setSelectedEntity,
+    isPresentationMode,
     updateProject,
     duplicateProject,
     deleteProject,
@@ -43,6 +48,7 @@ export function EntityDrawer() {
     updateTask,
     deleteTask,
     upsertAssignment,
+    assignPersonToPlaceholder,
     removeAssignment,
     addDependency,
     removeDependency,
@@ -52,10 +58,13 @@ export function EntityDrawer() {
   const [newTaskName, setNewTaskName] = useState('');
   const [selectedPersonId, setSelectedPersonId] = useState('');
   const [selectedAlloc, setSelectedAlloc] = useState('');
+  const [tbdLabel, setTbdLabel] = useState('');
+  const [tbdAlloc, setTbdAlloc] = useState('50');
+  const [whoFitsOpenId, setWhoFitsOpenId] = useState<string | null>(null);
   const [depFromKey, setDepFromKey] = useState('');
   const [depError, setDepError] = useState<string | null>(null);
 
-  if (!selectedEntity) return null;
+  if (!selectedEntity || isPresentationMode) return null;
 
   const project = plan.projects.find((p) => p.id === selectedEntity.projectId);
   if (!project) return null;
@@ -77,7 +86,6 @@ export function EntityDrawer() {
       : a.project_id === project.id && a.task_id === null,
   );
 
-  // Incoming & outgoing dependencies for current entity
   const currentType: EntityType = isTaskMode ? 'task' : 'project';
   const currentId = item.id;
   const predecessors = plan.dependencies.filter(
@@ -97,7 +105,6 @@ export function EntityDrawer() {
     return parent ? `${parent.name} → ${tk.name}` : tk.name;
   };
 
-  // Candidate predecessor options
   const candidateNodes: { key: string; type: EntityType; id: string; label: string }[] = [
     ...plan.projects
       .filter((p) => !(currentType === 'project' && p.id === currentId))
@@ -120,10 +127,7 @@ export function EntityDrawer() {
       }),
   ];
 
-  const handlePatch = (
-    patch: Record<string, unknown>,
-    checkCascade = false,
-  ) => {
+  const handlePatch = (patch: Record<string, unknown>, checkCascade = false) => {
     if (isTaskMode) {
       updateTask(activeTask!.id, patch, checkCascade);
     } else {
@@ -134,7 +138,7 @@ export function EntityDrawer() {
   return (
     <aside
       aria-label={isTaskMode ? 'Task inspector' : 'Project inspector'}
-      className="w-96 shrink-0 border-l flex flex-col h-full overflow-hidden shadow-lg"
+      className="w-96 shrink-0 border-l flex flex-col h-full overflow-hidden shadow-lg print:hidden"
       style={{
         backgroundColor: 'var(--bg-surface)',
         borderColor: 'var(--border-default)',
@@ -162,7 +166,10 @@ export function EntityDrawer() {
               <span className="truncate">{project.name}</span>
             </button>
           ) : (
-            <span className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-secondary)' }}>
+            <span
+              className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wider"
+              style={{ color: 'var(--text-secondary)' }}
+            >
               <HealthDot health={metrics.health} />
               Project Details
             </span>
@@ -215,7 +222,7 @@ export function EntityDrawer() {
           )}
         </div>
 
-        {/* Status, Priority, Progress */}
+        {/* Status, Priority */}
         <div className="grid grid-cols-2 gap-2.5">
           <div>
             <label className="block mb-1 font-medium" style={{ color: 'var(--text-secondary)' }}>
@@ -287,9 +294,7 @@ export function EntityDrawer() {
             step={5}
             disabled={!isTaskMode && projectTasks.length > 0 && project.auto_progress}
             value={item.percent_complete}
-            onChange={(e) =>
-              handlePatch({ percent_complete: Number(e.target.value) })
-            }
+            onChange={(e) => handlePatch({ percent_complete: Number(e.target.value) })}
             className="w-full"
           />
         </div>
@@ -297,7 +302,10 @@ export function EntityDrawer() {
         {/* Schedule & Deadlines */}
         <div className="space-y-2.5">
           <div className="flex items-center justify-between">
-            <span className="font-semibold uppercase tracking-wider text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+            <span
+              className="font-semibold uppercase tracking-wider text-[11px]"
+              style={{ color: 'var(--text-secondary)' }}
+            >
               Schedule ({formatDurationLabel(metrics.durationWorkingDays)})
             </span>
             <HeadroomBadge headroomDays={metrics.headroomDays} />
@@ -305,7 +313,8 @@ export function EntityDrawer() {
 
           {datesControlledByTasks && (
             <p className="text-[11px] px-2.5 py-1.5 rounded bg-blue-500/10 text-blue-600 dark:text-blue-400">
-              Expected start &amp; end roll up automatically from this project&apos;s {projectTasks.length} phases.
+              Expected start &amp; end roll up automatically from this project&apos;s{' '}
+              {projectTasks.length} phases.
             </p>
           )}
 
@@ -356,9 +365,7 @@ export function EntityDrawer() {
               <input
                 type="date"
                 value={item.required_by ?? ''}
-                onChange={(e) =>
-                  handlePatch({ required_by: e.target.value || null })
-                }
+                onChange={(e) => handlePatch({ required_by: e.target.value || null })}
                 className="w-full px-2 py-1.5 rounded border"
                 style={{
                   borderColor: 'var(--border-default)',
@@ -376,9 +383,7 @@ export function EntityDrawer() {
                   type="date"
                   title="Actual Start"
                   value={item.actual_start ?? ''}
-                  onChange={(e) =>
-                    handlePatch({ actual_start: e.target.value || null })
-                  }
+                  onChange={(e) => handlePatch({ actual_start: e.target.value || null })}
                   className="w-1/2 px-1.5 py-1.5 rounded border text-[11px]"
                   style={{
                     borderColor: 'var(--border-default)',
@@ -389,9 +394,7 @@ export function EntityDrawer() {
                   type="date"
                   title="Actual End"
                   value={item.actual_end ?? ''}
-                  onChange={(e) =>
-                    handlePatch({ actual_end: e.target.value || null })
-                  }
+                  onChange={(e) => handlePatch({ actual_end: e.target.value || null })}
                   className="w-1/2 px-1.5 py-1.5 rounded border text-[11px]"
                   style={{
                     borderColor: 'var(--border-default)',
@@ -402,7 +405,7 @@ export function EntityDrawer() {
             </div>
           </div>
 
-          {/* Original Commitment Comparison (Section 12) */}
+          {/* Original Commitment Comparison */}
           <div
             className="flex items-center justify-between px-2.5 py-1.5 rounded border text-[11px]"
             style={{ borderColor: 'var(--border-default)' }}
@@ -424,9 +427,7 @@ export function EntityDrawer() {
             {item.original_expected_end !== item.expected_end && (
               <button
                 type="button"
-                onClick={() =>
-                  handlePatch({ original_expected_end: item.expected_end })
-                }
+                onClick={() => handlePatch({ original_expected_end: item.expected_end })}
                 title="Reset original commitment to current expected end"
                 className="inline-flex items-center gap-1 text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
               >
@@ -437,15 +438,16 @@ export function EntityDrawer() {
           </div>
         </div>
 
-        {/* High-level Phases / Tasks (when viewing Project) */}
+        {/* High-level Phases / Tasks */}
         {!isTaskMode && (
           <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="font-semibold uppercase tracking-wider text-[11px] flex items-center gap-1.5" style={{ color: 'var(--text-secondary)' }}>
-                <Layers className="w-3.5 h-3.5" aria-hidden="true" />
-                Phases / Tasks ({projectTasks.length})
-              </span>
-            </div>
+            <span
+              className="font-semibold uppercase tracking-wider text-[11px] flex items-center gap-1.5"
+              style={{ color: 'var(--text-secondary)' }}
+            >
+              <Layers className="w-3.5 h-3.5" aria-hidden="true" />
+              Phases / Tasks ({projectTasks.length})
+            </span>
 
             {projectTasks.length > 0 && (
               <div
@@ -517,12 +519,15 @@ export function EntityDrawer() {
           </div>
         )}
 
-        {/* Assigned People */}
-        <div className="space-y-2">
+        {/* Assigned People & TBD Demand Slots */}
+        <div className="space-y-2.5">
           <div className="flex items-center justify-between">
-            <span className="font-semibold uppercase tracking-wider text-[11px] flex items-center gap-1.5" style={{ color: 'var(--text-secondary)' }}>
+            <span
+              className="font-semibold uppercase tracking-wider text-[11px] flex items-center gap-1.5"
+              style={{ color: 'var(--text-secondary)' }}
+            >
               <Users className="w-3.5 h-3.5" aria-hidden="true" />
-              Assigned People
+              People &amp; TBD Slots
             </span>
             <button
               type="button"
@@ -539,18 +544,61 @@ export function EntityDrawer() {
               style={{ borderColor: 'var(--border-default)' }}
             >
               {scopedAssignments.map((asg) => {
-                const person = plan.people.find((p) => p.id === asg.person_id);
+                const isPlaceholder = !asg.person_id;
+                const person = asg.person_id
+                  ? plan.people.find((p) => p.id === asg.person_id)
+                  : undefined;
+                const win = resolveAssignmentWindow(asg, project, activeTask);
+                const isWhoFitsOpen = whoFitsOpenId === asg.id;
+
+                const candidates =
+                  isPlaceholder && isWhoFitsOpen && win
+                    ? rankPeopleForSlot(
+                        plan,
+                        win.start,
+                        win.end,
+                        asg.allocation_pct ?? 100,
+                      )
+                    : [];
+
                 return (
                   <div
                     key={asg.id}
-                    className="p-2 space-y-1.5"
+                    className={`p-2.5 space-y-2 ${
+                      isPlaceholder ? 'bg-amber-500/6' : ''
+                    }`}
                     style={{ borderColor: 'var(--border-default)' }}
                   >
                     <div className="flex items-center justify-between gap-2">
-                      <span className="font-medium truncate">
-                        {person?.name ?? asg.person_id}
-                      </span>
-                      <div className="flex items-center gap-1.5">
+                      {isPlaceholder ? (
+                        <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                          <span className="px-1.5 py-0.5 rounded border border-dashed border-amber-500/60 bg-amber-500/15 text-amber-700 dark:text-amber-300 text-[10px] font-semibold shrink-0">
+                            TBD
+                          </span>
+                          <input
+                            type="text"
+                            value={asg.placeholder_label ?? 'TBD'}
+                            onChange={(e) =>
+                              upsertAssignment({
+                                ...asg,
+                                placeholder_label: e.target.value,
+                              })
+                            }
+                            aria-label="Placeholder slot label"
+                            className="min-w-0 flex-1 px-1.5 py-0.5 rounded border text-xs font-medium"
+                            style={{
+                              borderColor: 'var(--border-default)',
+                              backgroundColor: 'var(--bg-surface)',
+                            }}
+                          />
+                        </div>
+                      ) : (
+                        <span className="font-medium truncate">
+                          {person?.name ?? asg.person_id}
+                        </span>
+                      )}
+
+                      <div className="flex items-center gap-1.5 shrink-0">
                         <input
                           type="number"
                           min={5}
@@ -565,8 +613,8 @@ export function EntityDrawer() {
                               allocation_pct: raw === '' ? null : Number(raw),
                             });
                           }}
-                          aria-label={`Allocation percentage for ${person?.name ?? ''}`}
-                          className="w-16 px-1.5 py-0.5 rounded border text-right"
+                          aria-label="Allocation percentage"
+                          className="w-15 px-1.5 py-0.5 rounded border text-right"
                           style={{
                             borderColor: 'var(--border-default)',
                             backgroundColor: 'var(--bg-subtle)',
@@ -586,49 +634,133 @@ export function EntityDrawer() {
                       </div>
                     </div>
 
-                    {/* Optional partial join/leave dates */}
-                    <div className="flex items-center gap-1.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                      <span>Dates:</span>
-                      <input
-                        type="date"
-                        value={asg.start_date ?? ''}
-                        onChange={(e) =>
-                          upsertAssignment({
-                            ...asg,
-                            start_date: e.target.value || null,
-                          })
-                        }
-                        title="Optional join date override"
-                        className="px-1 py-0.5 rounded border flex-1"
-                        style={{
-                          borderColor: 'var(--border-default)',
-                          backgroundColor: 'var(--bg-subtle)',
-                        }}
-                      />
-                      <span>→</span>
-                      <input
-                        type="date"
-                        value={asg.end_date ?? ''}
-                        onChange={(e) =>
-                          upsertAssignment({
-                            ...asg,
-                            end_date: e.target.value || null,
-                          })
-                        }
-                        title="Optional leave date override"
-                        className="px-1 py-0.5 rounded border flex-1"
-                        style={{
-                          borderColor: 'var(--border-default)',
-                          backgroundColor: 'var(--bg-subtle)',
-                        }}
-                      />
+                    {/* Dates + Who Fits Trigger */}
+                    <div
+                      className="flex items-center justify-between gap-1.5 text-[11px]"
+                      style={{ color: 'var(--text-muted)' }}
+                    >
+                      <div className="flex items-center gap-1 flex-1 min-w-0">
+                        <input
+                          type="date"
+                          value={asg.start_date ?? ''}
+                          onChange={(e) =>
+                            upsertAssignment({
+                              ...asg,
+                              start_date: e.target.value || null,
+                            })
+                          }
+                          title="Optional join date override"
+                          className="px-1 py-0.5 rounded border w-[108px]"
+                          style={{
+                            borderColor: 'var(--border-default)',
+                            backgroundColor: 'var(--bg-subtle)',
+                          }}
+                        />
+                        <span>→</span>
+                        <input
+                          type="date"
+                          value={asg.end_date ?? ''}
+                          onChange={(e) =>
+                            upsertAssignment({
+                              ...asg,
+                              end_date: e.target.value || null,
+                            })
+                          }
+                          title="Optional leave date override"
+                          className="px-1 py-0.5 rounded border w-[108px]"
+                          style={{
+                            borderColor: 'var(--border-default)',
+                            backgroundColor: 'var(--bg-subtle)',
+                          }}
+                        />
+                      </div>
+
+                      {isPlaceholder && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setWhoFitsOpenId(isWhoFitsOpen ? null : asg.id)
+                          }
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-800 dark:text-amber-300 font-semibold cursor-pointer shrink-0"
+                        >
+                          <Sparkles className="w-3 h-3" aria-hidden="true" />
+                          Who fits?
+                        </button>
+                      )}
                     </div>
+
+                    {/* Ranked "Who fits?" Matcher Panel */}
+                    {isPlaceholder && isWhoFitsOpen && (
+                      <div
+                        className="p-2 rounded-lg border space-y-1.5"
+                        style={{
+                          backgroundColor: 'var(--bg-surface)',
+                          borderColor: 'var(--border-strong)',
+                        }}
+                      >
+                        <div
+                          className="text-[10px] font-semibold uppercase tracking-wider"
+                          style={{ color: 'var(--text-secondary)' }}
+                        >
+                          Best Capacity Matches ({asg.allocation_pct ?? 100}% needed)
+                        </div>
+                        {candidates.length === 0 ? (
+                          <div className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                            Add team members first to check capacity fit.
+                          </div>
+                        ) : (
+                          candidates.map((cand) => {
+                            const dotClass =
+                              cand.fitStatus === 'full'
+                                ? 'bg-emerald-500'
+                                : cand.fitStatus === 'partial'
+                                  ? 'bg-amber-400'
+                                  : 'bg-red-500';
+                            return (
+                              <div
+                                key={cand.personId}
+                                className="flex items-center justify-between gap-2 py-1 border-b last:border-b-0"
+                                style={{ borderColor: 'var(--border-default)' }}
+                              >
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-1.5 font-medium">
+                                    <span
+                                      className={`w-2 h-2 rounded-full shrink-0 ${dotClass}`}
+                                    />
+                                    <span className="truncate">{cand.personName}</span>
+                                  </div>
+                                  <div
+                                    className="text-[10px] pl-3.5"
+                                    style={{ color: 'var(--text-secondary)' }}
+                                  >
+                                    {cand.avgFreePct}% avg free · {cand.peakWeeklyAfterPct}%
+                                    peak wk after
+                                  </div>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    assignPersonToPlaceholder(asg.id, cand.personId);
+                                    setWhoFitsOpenId(null);
+                                  }}
+                                  className="inline-flex items-center gap-1 px-2 py-1 rounded bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-medium cursor-pointer shrink-0"
+                                >
+                                  <UserCheck className="w-3 h-3" aria-hidden="true" />
+                                  Assign
+                                </button>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })}
             </div>
           )}
 
+          {/* Assign Named Person */}
           {plan.people.length > 0 && (
             <form
               onSubmit={(e) => {
@@ -687,11 +819,65 @@ export function EntityDrawer() {
               </button>
             </form>
           )}
+
+          {/* Add Unassigned / TBD Demand Slot */}
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              const label = tbdLabel.trim() || 'TBD Role';
+              const normalizedLabel = label.toUpperCase().startsWith('TBD')
+                ? label
+                : `TBD — ${label}`;
+              upsertAssignment({
+                person_id: null,
+                placeholder_label: normalizedLabel,
+                project_id: project.id,
+                task_id: isTaskMode ? activeTask!.id : null,
+                allocation_pct: tbdAlloc.trim() === '' ? null : Number(tbdAlloc),
+                start_date: null,
+                end_date: null,
+              });
+              setTbdLabel('');
+            }}
+            className="flex gap-1.5 pt-0.5"
+          >
+            <input
+              type="text"
+              value={tbdLabel}
+              onChange={(e) => setTbdLabel(e.target.value)}
+              placeholder="TBD role (e.g. Reviewer)…"
+              aria-label="Placeholder TBD role name"
+              className="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg border border-dashed border-amber-500/50"
+              style={{ backgroundColor: 'var(--bg-subtle)' }}
+            />
+            <input
+              type="number"
+              min={5}
+              max={200}
+              step={5}
+              value={tbdAlloc}
+              onChange={(e) => setTbdAlloc(e.target.value)}
+              placeholder="%"
+              aria-label="TBD slot allocation percentage"
+              className="w-18 px-2 py-1.5 rounded-lg border border-dashed border-amber-500/50"
+              style={{ backgroundColor: 'var(--bg-subtle)' }}
+            />
+            <button
+              type="submit"
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-amber-500/50 bg-amber-500/15 hover:bg-amber-500/25 text-amber-800 dark:text-amber-300 font-medium cursor-pointer shrink-0"
+            >
+              <UserPlus className="w-3.5 h-3.5" aria-hidden="true" />
+              + TBD
+            </button>
+          </form>
         </div>
 
         {/* Dependencies (Finish-to-Start) */}
         <div className="space-y-2">
-          <span className="font-semibold uppercase tracking-wider text-[11px] flex items-center gap-1.5" style={{ color: 'var(--text-secondary)' }}>
+          <span
+            className="font-semibold uppercase tracking-wider text-[11px] flex items-center gap-1.5"
+            style={{ color: 'var(--text-secondary)' }}
+          >
             <GitBranch className="w-3.5 h-3.5" aria-hidden="true" />
             Dependencies (Finish-to-Start)
           </span>

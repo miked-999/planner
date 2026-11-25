@@ -246,8 +246,15 @@ def build_sample_plan(today: date | None = None) -> PlanDocument:
         Assignment(id="asg-10", person_id="person-dan", project_id="proj-c", task_id="task-c1", allocation_pct=50),
         Assignment(id="asg-11", person_id="person-dan", project_id="proj-c", task_id="task-c2", allocation_pct=50),
         Assignment(id="asg-12", person_id="person-dan", project_id="proj-a", task_id="task-a3", allocation_pct=50),
-        # Elena: Epsilon (75% W2-W4)
+        # Elena: Epsilon (75% W2-W4) + 1 open TBD Reviewer slot (50% W2-W4)
         Assignment(id="asg-13", person_id="person-elena", project_id="proj-e", allocation_pct=75),
+        Assignment(
+            id="asg-14",
+            person_id=None,
+            placeholder_label="TBD — Security Reviewer",
+            project_id="proj-e",
+            allocation_pct=50,
+        ),
     ]
 
     unavailabilities = [

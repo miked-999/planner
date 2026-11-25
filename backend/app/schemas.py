@@ -117,7 +117,8 @@ class Task(BaseModel):
 
 class Assignment(BaseModel):
     id: str = Field(min_length=1)
-    person_id: str = Field(min_length=1)
+    person_id: str | None = None
+    placeholder_label: str | None = Field(default=None, max_length=120)
     project_id: str = Field(min_length=1)
     task_id: str | None = None
     allocation_pct: int | None = Field(default=None, ge=1, le=200)
@@ -125,7 +126,15 @@ class Assignment(BaseModel):
     end_date: str | None = None
 
     @model_validator(mode="after")
-    def validate_dates(self) -> Assignment:
+    def validate_dates_and_assignee(self) -> Assignment:
+        if self.placeholder_label is not None:
+            self.placeholder_label = self.placeholder_label.strip() or None
+        if not self.person_id and not self.placeholder_label:
+            raise ValueError(
+                "Assignment must specify either person_id or placeholder_label (TBD)"
+            )
+        if self.person_id:
+            self.placeholder_label = None
         s = _parse_iso_date(self.start_date, "start_date") if self.start_date else None
         e = _parse_iso_date(self.end_date, "end_date") if self.end_date else None
         if s and e and e < s:
@@ -166,7 +175,7 @@ class PlanDocument(BaseModel):
                 raise ValueError(f"Task {t.id} references unknown project {t.project_id}")
 
         for a in self.assignments:
-            if a.person_id not in person_ids:
+            if a.person_id is not None and a.person_id not in person_ids:
                 raise ValueError(f"Assignment {a.id} references unknown person {a.person_id}")
             if a.project_id not in project_ids:
                 raise ValueError(f"Assignment {a.id} references unknown project {a.project_id}")

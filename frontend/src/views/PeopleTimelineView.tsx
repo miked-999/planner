@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import { Crosshair, UserPlus, ZoomIn, ZoomOut } from 'lucide-react';
+import { Crosshair, Sparkles, UserPlus, ZoomIn, ZoomOut } from 'lucide-react';
 import {
   computePersonAvailability,
   resolveAssignmentWindow,
@@ -28,7 +28,7 @@ const ROW_PADDING_Y = 10;
 
 interface PersonBar {
   id: string;
-  kind: 'assignment' | 'leave';
+  kind: 'assignment' | 'leave' | 'tbd';
   label: string;
   sublabel?: string;
   color: string;
@@ -73,6 +73,7 @@ export function PeopleTimelineView() {
   const {
     plan,
     todayIso,
+    isPresentationMode,
     setSelectedEntity,
     setTeamDrawerOpen,
   } = usePlan();
@@ -118,6 +119,41 @@ export function PeopleTimelineView() {
     () => new Map(plan.tasks.map((t) => [t.id, t])),
     [plan.tasks],
   );
+
+  // Unassigned TBD Demand Row
+  const tbdRow = useMemo(() => {
+    const rawBars: Omit<PersonBar, 'lane'>[] = [];
+    for (const asg of plan.assignments) {
+      if (asg.person_id) continue;
+      const proj = projectMap.get(asg.project_id);
+      const task = asg.task_id ? taskMap.get(asg.task_id) : undefined;
+      if (!proj || proj.status === 'completed') continue;
+      if (task && task.status === 'completed') continue;
+      const win = resolveAssignmentWindow(asg, proj, task);
+      if (!win) continue;
+      rawBars.push({
+        id: asg.id,
+        kind: 'tbd',
+        label: `${asg.placeholder_label || 'TBD'} · ${proj.name}`,
+        sublabel: task?.name,
+        color: proj.color,
+        start: win.start,
+        end: win.end,
+        allocationPct: asg.allocation_pct ?? 100,
+        projectId: proj.id,
+        taskId: asg.task_id,
+      });
+    }
+    if (rawBars.length === 0) return null;
+    const { packed, laneCount } = packBarsIntoLanes(rawBars);
+    const rowHeight =
+      ROW_PADDING_Y * 2 + laneCount * LANE_HEIGHT + (laneCount - 1) * LANE_GAP;
+    return {
+      bars: packed,
+      count: rawBars.length,
+      rowHeight: Math.max(54, rowHeight),
+    };
+  }, [plan.assignments, projectMap, taskMap]);
 
   const personRows = useMemo(() => {
     return plan.people.map((person) => {
@@ -184,7 +220,7 @@ export function PeopleTimelineView() {
     });
   };
 
-  if (plan.people.length === 0) {
+  if (plan.people.length === 0 && !tbdRow) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
         <div className="max-w-sm space-y-3">
@@ -193,14 +229,16 @@ export function PeopleTimelineView() {
             Add team members to view their assignments, overlapping workloads, and when
             each person becomes free.
           </p>
-          <button
-            type="button"
-            onClick={() => setTeamDrawerOpen(true)}
-            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer"
-          >
-            <UserPlus className="w-4 h-4" aria-hidden="true" />
-            Manage Team
-          </button>
+          {!isPresentationMode && (
+            <button
+              type="button"
+              onClick={() => setTeamDrawerOpen(true)}
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer"
+            >
+              <UserPlus className="w-4 h-4" aria-hidden="true" />
+              Manage Team
+            </button>
+          )}
         </div>
       </div>
     );
@@ -212,7 +250,7 @@ export function PeopleTimelineView() {
     <div className="flex-1 flex flex-col min-h-0">
       {/* Toolbar */}
       <div
-        className="px-4 py-2 border-b flex items-center justify-between gap-2 text-xs"
+        className="px-4 py-2 border-b flex items-center justify-between gap-2 text-xs print:hidden"
         style={{
           backgroundColor: 'var(--bg-surface)',
           borderColor: 'var(--border-default)',
@@ -259,15 +297,17 @@ export function PeopleTimelineView() {
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={() => setTeamDrawerOpen(true)}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border font-medium hover:bg-slate-500/10 cursor-pointer"
-          style={{ borderColor: 'var(--border-default)' }}
-        >
-          <UserPlus className="w-3.5 h-3.5" aria-hidden="true" />
-          Manage Team &amp; Leave
-        </button>
+        {!isPresentationMode && (
+          <button
+            type="button"
+            onClick={() => setTeamDrawerOpen(true)}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border font-medium hover:bg-slate-500/10 cursor-pointer"
+            style={{ borderColor: 'var(--border-default)' }}
+          >
+            <UserPlus className="w-3.5 h-3.5" aria-hidden="true" />
+            Manage Team &amp; Leave
+          </button>
+        )}
       </div>
 
       {/* Scrollable People Timeline */}
@@ -343,13 +383,117 @@ export function PeopleTimelineView() {
             </div>
           </div>
 
-          {/* Person Rows */}
+          {/* Rows */}
           <div className="relative">
             <div
               aria-hidden="true"
               className="pointer-events-none absolute top-0 bottom-0 z-10 w-0.5 bg-red-500/80"
               style={{ left: SIDEBAR_COL_WIDTH + todayX }}
             />
+
+            {/* Unassigned TBD Demand Row */}
+            {tbdRow && (
+              <div
+                style={{
+                  height: tbdRow.rowHeight,
+                  borderColor: 'var(--border-default)',
+                }}
+                className="flex border-b bg-amber-500/5"
+              >
+                <div
+                  style={{
+                    width: SIDEBAR_COL_WIDTH,
+                    backgroundColor: 'var(--bg-surface)',
+                    borderColor: 'var(--border-default)',
+                  }}
+                  className="sticky left-0 z-15 shrink-0 px-3 border-r flex items-center justify-between gap-2 text-xs"
+                >
+                  <div className="min-w-0">
+                    <div className="font-semibold text-amber-700 dark:text-amber-400 flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                      <span>Unassigned (TBD)</span>
+                    </div>
+                    <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                      Click bar to match team
+                    </div>
+                  </div>
+                  <span className="px-2 py-0.5 rounded border border-dashed border-amber-500/60 bg-amber-500/15 text-amber-700 dark:text-amber-300 text-[11px] font-semibold">
+                    {tbdRow.count} open
+                  </span>
+                </div>
+
+                <div
+                  className="relative"
+                  style={{ width: totalWidth, height: tbdRow.rowHeight }}
+                >
+                  <div className="absolute inset-0 flex pointer-events-none">
+                    {weeks.map((w) => (
+                      <div
+                        key={w.weekStart}
+                        style={{
+                          width: 7 * dayPx,
+                          borderColor: 'var(--border-default)',
+                        }}
+                        className="h-full border-r relative"
+                      >
+                        <div
+                          className="absolute top-0 bottom-0 right-0 bg-slate-500/6"
+                          style={{ width: 2 * dayPx }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+
+                  {tbdRow.bars.map((bar) => {
+                    const left = dateToX(bar.start);
+                    const width = Math.max(
+                      dayPx,
+                      (calendarDaysBetween(bar.start, bar.end) + 1) * dayPx,
+                    );
+                    const top = ROW_PADDING_Y + bar.lane * (LANE_HEIGHT + LANE_GAP);
+                    return (
+                      <button
+                        key={bar.id}
+                        type="button"
+                        onClick={() => {
+                          if (isPresentationMode || !bar.projectId) return;
+                          setSelectedEntity(
+                            bar.taskId
+                              ? {
+                                  type: 'task',
+                                  id: bar.taskId,
+                                  projectId: bar.projectId,
+                                }
+                              : {
+                                  type: 'project',
+                                  id: bar.projectId,
+                                  projectId: bar.projectId,
+                                },
+                          );
+                        }}
+                        title={`${bar.label}${bar.sublabel ? ` → ${bar.sublabel}` : ''}\n${formatShortDate(bar.start)} – ${formatShortDate(bar.end)} (${bar.allocationPct}% needed)`}
+                        style={{
+                          left,
+                          width,
+                          top,
+                          height: LANE_HEIGHT,
+                          borderColor: bar.color,
+                          backgroundColor: `${bar.color}22`,
+                        }}
+                        className="absolute z-15 rounded-md border-2 border-dashed px-2 flex items-center justify-between gap-1 text-[11px] font-semibold cursor-pointer overflow-hidden"
+                      >
+                        <span className="truncate">{bar.label}</span>
+                        {width > 75 && (
+                          <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-500/25 text-amber-800 dark:text-amber-200 shrink-0">
+                            {bar.allocationPct}%
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {personRows.map(({ person, bars, rowHeight, avail }) => {
               const availX = Math.max(0, dateToX(avail.availableDate));
@@ -364,7 +508,6 @@ export function PeopleTimelineView() {
                   }}
                   className="flex border-b"
                 >
-                  {/* Sticky Person Cell */}
                   <div
                     style={{
                       width: SIDEBAR_COL_WIDTH,
@@ -395,7 +538,6 @@ export function PeopleTimelineView() {
                     </span>
                   </div>
 
-                  {/* Person Timeline Canvas */}
                   <div className="relative" style={{ width: totalWidth, height: rowHeight }}>
                     <div className="absolute inset-0 flex pointer-events-none">
                       {weeks.map((w) => (
@@ -415,7 +557,6 @@ export function PeopleTimelineView() {
                       ))}
                     </div>
 
-                    {/* Subtle "Available" future span marker */}
                     {availX < totalWidth - 80 && (
                       <div
                         className="pointer-events-none absolute top-1.5 px-2 py-0.5 rounded border border-dashed border-emerald-500/35 bg-emerald-500/6 text-[10px] text-emerald-700 dark:text-emerald-400"
@@ -425,15 +566,13 @@ export function PeopleTimelineView() {
                       </div>
                     )}
 
-                    {/* Stacked Assignment & Leave Bars */}
                     {bars.map((bar) => {
                       const left = dateToX(bar.start);
                       const width = Math.max(
                         dayPx,
                         (calendarDaysBetween(bar.start, bar.end) + 1) * dayPx,
                       );
-                      const top =
-                        ROW_PADDING_Y + bar.lane * (LANE_HEIGHT + LANE_GAP);
+                      const top = ROW_PADDING_Y + bar.lane * (LANE_HEIGHT + LANE_GAP);
 
                       if (bar.kind === 'leave') {
                         return (
@@ -458,7 +597,7 @@ export function PeopleTimelineView() {
                           key={bar.id}
                           type="button"
                           onClick={() => {
-                            if (!bar.projectId) return;
+                            if (isPresentationMode || !bar.projectId) return;
                             setSelectedEntity(
                               bar.taskId
                                 ? {
@@ -481,7 +620,11 @@ export function PeopleTimelineView() {
                             height: LANE_HEIGHT,
                             backgroundColor: bar.color,
                           }}
-                          className="absolute z-15 rounded-md text-white px-2 flex items-center justify-between gap-1 text-[11px] font-medium shadow-2xs hover:brightness-105 cursor-pointer overflow-hidden"
+                          className={`absolute z-15 rounded-md text-white px-2 flex items-center justify-between gap-1 text-[11px] font-medium shadow-2xs overflow-hidden ${
+                            isPresentationMode
+                              ? 'cursor-default'
+                              : 'hover:brightness-105 cursor-pointer'
+                          }`}
                         >
                           <span className="truncate">
                             {bar.label}

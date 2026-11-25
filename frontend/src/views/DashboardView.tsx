@@ -28,6 +28,7 @@ export function DashboardView() {
   const {
     plan,
     todayIso,
+    isPresentationMode,
     setActiveView,
     setSelectedEntity,
     createProject,
@@ -98,6 +99,14 @@ export function DashboardView() {
       .slice(0, 6);
 
     const violatedDepIds = findViolatedDependencyIds(plan);
+    const projMap = new Map(plan.projects.map((p) => [p.id, p]));
+    const openTbdSlots = plan.assignments
+      .filter((a) => !a.person_id)
+      .map((a) => ({
+        assignment: a,
+        project: projMap.get(a.project_id),
+      }))
+      .filter((x) => x.project && x.project.status !== 'completed');
 
     return {
       activeProjects,
@@ -109,6 +118,7 @@ export function DashboardView() {
       becomingAvailableIn4Weeks,
       upcomingDeliveries,
       violatedDepCount: violatedDepIds.size,
+      openTbdSlots,
     };
   }, [plan, todayIso, horizon4WeeksIso]);
 
@@ -119,28 +129,30 @@ export function DashboardView() {
           <h2 className="text-lg font-semibold">Welcome to Project &amp; Resource Planner</h2>
           <p className="text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
             A lightweight forward-planning workspace alongside Jira. Load the sample plan to
-            explore timelines, capacity heatmaps, dependency cascades, and What-if Mode, or
-            create your first project.
+            explore timelines, capacity heatmaps, dependency cascades, TBD slots, and What-if
+            Mode, or create your first project.
           </p>
-          <div className="flex items-center justify-center gap-3 pt-2">
-            <button
-              type="button"
-              onClick={() => createProject()}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer"
-            >
-              <Plus className="w-4 h-4" aria-hidden="true" />
-              New Project
-            </button>
-            <button
-              type="button"
-              onClick={() => void loadSamplePlan()}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg border text-xs font-medium hover:bg-slate-500/10 cursor-pointer"
-              style={{ borderColor: 'var(--border-strong)' }}
-            >
-              <Sparkles className="w-4 h-4 text-amber-500" aria-hidden="true" />
-              Load Sample Plan
-            </button>
-          </div>
+          {!isPresentationMode && (
+            <div className="flex items-center justify-center gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => createProject()}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold cursor-pointer"
+              >
+                <Plus className="w-4 h-4" aria-hidden="true" />
+                New Project
+              </button>
+              <button
+                type="button"
+                onClick={() => void loadSamplePlan()}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg border text-xs font-medium hover:bg-slate-500/10 cursor-pointer"
+                style={{ borderColor: 'var(--border-strong)' }}
+              >
+                <Sparkles className="w-4 h-4 text-amber-500" aria-hidden="true" />
+                Load Sample Plan
+              </button>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -199,7 +211,6 @@ export function DashboardView() {
 
   return (
     <div className="flex-1 overflow-y-auto p-5 space-y-6 text-xs">
-      {/* 6 Headline KPI Cards */}
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
         {kpis.map((card) => {
           const Icon = card.icon;
@@ -214,11 +225,16 @@ export function DashboardView() {
                 borderColor: 'var(--border-default)',
               }}
             >
-              <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${card.tone}`}>
+              <div
+                className={`w-8 h-8 rounded-lg flex items-center justify-center ${card.tone}`}
+              >
                 <Icon className="w-4 h-4" aria-hidden="true" />
               </div>
               <div className="text-2xl font-bold tracking-tight">{card.value}</div>
-              <div className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
+              <div
+                className="text-[11px] font-medium"
+                style={{ color: 'var(--text-secondary)' }}
+              >
                 {card.label}
               </div>
             </button>
@@ -226,7 +242,6 @@ export function DashboardView() {
         })}
       </div>
 
-      {/* Three Management Panels */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Panel 1: Upcoming Completions */}
         <section
@@ -241,7 +256,7 @@ export function DashboardView() {
             <button
               type="button"
               onClick={() => setActiveView('timeline')}
-              className="text-[11px] text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
+              className="text-[11px] text-blue-600 dark:text-blue-400 hover:underline cursor-pointer print:hidden"
             >
               View timeline →
             </button>
@@ -255,11 +270,13 @@ export function DashboardView() {
                   key={proj.id}
                   type="button"
                   onClick={() => {
-                    setSelectedEntity({
-                      type: 'project',
-                      id: proj.id,
-                      projectId: proj.id,
-                    });
+                    if (!isPresentationMode) {
+                      setSelectedEntity({
+                        type: 'project',
+                        id: proj.id,
+                        projectId: proj.id,
+                      });
+                    }
                     setActiveView('timeline');
                   }}
                   className="w-full py-2.5 flex items-center justify-between gap-2 text-left hover:opacity-85 cursor-pointer"
@@ -270,7 +287,10 @@ export function DashboardView() {
                       <HealthDot health={m.health} />
                       <span className="truncate">{proj.name}</span>
                     </div>
-                    <div className="text-[11px] mt-0.5" style={{ color: 'var(--text-secondary)' }}>
+                    <div
+                      className="text-[11px] mt-0.5"
+                      style={{ color: 'var(--text-secondary)' }}
+                    >
                       Ends {formatShortDate(proj.expected_end)} · {proj.percent_complete}%
                     </div>
                   </div>
@@ -297,7 +317,7 @@ export function DashboardView() {
             <button
               type="button"
               onClick={() => setActiveView('people')}
-              className="text-[11px] text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
+              className="text-[11px] text-blue-600 dark:text-blue-400 hover:underline cursor-pointer print:hidden"
             >
               People timeline →
             </button>
@@ -334,7 +354,7 @@ export function DashboardView() {
           </div>
         </section>
 
-        {/* Panel 3: Planning Conflicts & Risks */}
+        {/* Panel 3: Planning Conflicts, Risks & TBD Demand */}
         <section
           className="rounded-xl border p-4 space-y-3"
           style={{
@@ -347,7 +367,7 @@ export function DashboardView() {
             <button
               type="button"
               onClick={() => setActiveView('capacity')}
-              className="text-[11px] text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
+              className="text-[11px] text-blue-600 dark:text-blue-400 hover:underline cursor-pointer print:hidden"
             >
               Capacity view →
             </button>
@@ -355,7 +375,8 @@ export function DashboardView() {
 
           {stats.lateProjects.length === 0 &&
           stats.overallocatedPeople.length === 0 &&
-          stats.violatedDepCount === 0 ? (
+          stats.violatedDepCount === 0 &&
+          stats.openTbdSlots.length === 0 ? (
             <div
               className="p-4 rounded-lg border text-center"
               style={{
@@ -363,7 +384,8 @@ export function DashboardView() {
                 color: 'var(--text-secondary)',
               }}
             >
-              🟢 No deadline breaches, broken dependencies, or resource overallocations.
+              🟢 No deadline breaches, broken dependencies, open TBD roles, or resource
+              overallocations.
             </div>
           ) : (
             <div className="space-y-2">
@@ -374,7 +396,13 @@ export function DashboardView() {
                     key={p.id}
                     type="button"
                     onClick={() => {
-                      setSelectedEntity({ type: 'project', id: p.id, projectId: p.id });
+                      if (!isPresentationMode) {
+                        setSelectedEntity({
+                          type: 'project',
+                          id: p.id,
+                          projectId: p.id,
+                        });
+                      }
                       setActiveView('timeline');
                     }}
                     className="w-full p-2.5 rounded-lg bg-red-500/10 border border-red-500/25 text-left hover:bg-red-500/15 cursor-pointer"
@@ -383,7 +411,8 @@ export function DashboardView() {
                       Late Forecast: {p.name}
                     </div>
                     <div className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
-                      {m.daysOverdue} working days past required-by ({formatShortDate(p.required_by)})
+                      {m.daysOverdue} working days past required-by (
+                      {formatShortDate(p.required_by)})
                     </div>
                   </button>
                 );
@@ -401,6 +430,44 @@ export function DashboardView() {
                   </div>
                   <div className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
                     Starting {op.firstConflictWeek}
+                  </div>
+                </button>
+              ))}
+
+              {stats.openTbdSlots.map(({ assignment, project }) => (
+                <button
+                  key={assignment.id}
+                  type="button"
+                  onClick={() => {
+                    if (!project) return;
+                    if (!isPresentationMode) {
+                      setSelectedEntity(
+                        assignment.task_id
+                          ? {
+                              type: 'task',
+                              id: assignment.task_id,
+                              projectId: project.id,
+                            }
+                          : {
+                              type: 'project',
+                              id: project.id,
+                              projectId: project.id,
+                            },
+                      );
+                    }
+                    setActiveView('timeline');
+                  }}
+                  className="w-full p-2.5 rounded-lg border border-dashed border-amber-500/50 bg-amber-500/8 text-left hover:bg-amber-500/14 cursor-pointer"
+                >
+                  <div className="font-semibold text-amber-700 dark:text-amber-300 flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                    <span>
+                      Unstaffed Slot: {assignment.placeholder_label || 'TBD'} (
+                      {assignment.allocation_pct ?? 100}%)
+                    </span>
+                  </div>
+                  <div className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+                    {project?.name} — click to check &ldquo;Who fits?&rdquo;
                   </div>
                 </button>
               ))}
