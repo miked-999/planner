@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -66,6 +66,8 @@ if FRONTEND_DIST.is_dir():
 
     @app.get("/{full_path:path}")
     def serve_spa(full_path: str) -> FileResponse:
+        if full_path == "api" or full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail=f"Unknown API route: /{full_path}")
         candidate = (FRONTEND_DIST / full_path).resolve()
         if full_path and candidate.is_file() and FRONTEND_DIST.resolve() in candidate.parents:
             return FileResponse(str(candidate))

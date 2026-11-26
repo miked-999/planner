@@ -10,7 +10,7 @@ build:
 	npm --prefix frontend run build
 
 start: build
-	$(UV) run --directory backend uvicorn app.main:app --host 127.0.0.1 --port 8000
+	$(UV) run --directory backend uvicorn app.main:app --reload --reload-dir app --host 127.0.0.1 --port 8000
 
 dev-backend:
 	$(UV) run --directory backend uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
