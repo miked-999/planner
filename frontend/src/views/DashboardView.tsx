@@ -22,6 +22,7 @@ import {
   mondayOfWeek,
 } from '../engine/dates';
 import { findViolatedDependencyIds } from '../engine/dependencies';
+import { byManualOrder } from '../engine/ordering';
 import { computeScheduleMetrics } from '../engine/rollup';
 import { usePlan } from '../store/PlanContext';
 import {
@@ -45,7 +46,7 @@ export function DashboardView() {
   const horizon4WeeksIso = useMemo(() => addCalendarDays(todayIso, 28), [todayIso]);
 
   const stats = useMemo(() => {
-    const visibleProjects = plan.projects.filter((p) => !p.archived);
+    const visibleProjects = byManualOrder(plan.projects).filter((p) => !p.archived);
     const activeProjects = visibleProjects.filter((p) => p.status === 'in_progress');
     const upcomingProjects = visibleProjects.filter(
       (p) => p.status === 'planned' && Boolean(p.expected_start),
@@ -333,34 +334,36 @@ export function DashboardView() {
                   Unscheduled Backlog ({stats.backlogProjects.length})
                 </span>
               </div>
-              {stats.backlogProjects.slice(0, 4).map((bp) => (
-                <button
-                  key={bp.id}
-                  type="button"
-                  onClick={() => {
-                    if (!isPresentationMode) {
-                      setSelectedEntity({
-                        type: 'project',
-                        id: bp.id,
-                        projectId: bp.id,
-                      });
-                    }
-                    setActiveView('timeline');
-                  }}
-                  className="w-full p-2 rounded-lg border border-purple-500/25 bg-purple-500/6 flex items-center justify-between gap-2 text-left hover:bg-purple-500/12 cursor-pointer"
-                >
-                  <span className="font-medium truncate">{bp.name}</span>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    <span
-                      className="text-[11px]"
-                      style={{ color: 'var(--text-secondary)' }}
-                    >
-                      ~{formatDurationLabel(bp.estimated_days ?? 10)}
-                    </span>
-                    <PriorityBadge priority={bp.priority} />
-                  </div>
-                </button>
-              ))}
+              <div className="max-h-60 overflow-y-auto space-y-2 pr-1 print:max-h-none print:overflow-visible">
+                {stats.backlogProjects.map((bp) => (
+                  <button
+                    key={bp.id}
+                    type="button"
+                    onClick={() => {
+                      if (!isPresentationMode) {
+                        setSelectedEntity({
+                          type: 'project',
+                          id: bp.id,
+                          projectId: bp.id,
+                        });
+                      }
+                      setActiveView('timeline');
+                    }}
+                    className="w-full p-2 rounded-lg border border-purple-500/25 bg-purple-500/6 flex items-center justify-between gap-2 text-left hover:bg-purple-500/12 cursor-pointer"
+                  >
+                    <span className="font-medium truncate">{bp.name}</span>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <span
+                        className="text-[11px]"
+                        style={{ color: 'var(--text-secondary)' }}
+                      >
+                        ~{formatDurationLabel(bp.estimated_days ?? 10)}
+                      </span>
+                      <PriorityBadge priority={bp.priority} />
+                    </div>
+                  </button>
+                ))}
+              </div>
             </div>
           )}
         </section>
