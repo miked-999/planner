@@ -318,3 +318,64 @@ def build_sample_plan(today: date | None = None) -> PlanDocument:
         unavailabilities=unavailabilities,
         dependencies=dependencies,
     )
+
+
+def build_sample_baseline_plan(today: date | None = None) -> PlanDocument:
+    """Returns how the sample plan looked 2 weeks ago (before Alpha/Beta slipped and Zeta was added)."""
+    current = build_sample_plan(today)
+    anchor = _monday_of_week(today or date.today())
+    w1 = _add_working_days(anchor, 5)
+    w2 = _add_working_days(anchor, 10)
+    w3 = _add_working_days(anchor, 15)
+    w5 = _add_working_days(anchor, 25)
+
+    def end_of_week(monday: date, extra_weeks: int = 0) -> date:
+        return _add_working_days(monday, extra_weeks * 5 + 4)
+
+    baseline_projects = []
+    for p in current.projects:
+        if p.id == "proj-f":
+            # Project Zeta wasn't in the plan yet at kickoff
+            continue
+        cp = p.model_copy(deep=True)
+        if cp.id == "proj-a":
+            cp.expected_end = end_of_week(w2).isoformat()
+            cp.percent_complete = 25
+        elif cp.id == "proj-b":
+            cp.expected_start = w3.isoformat()
+            cp.expected_end = end_of_week(w5).isoformat()  # Was on time!
+        elif cp.id == "proj-c":
+            cp.percent_complete = 15
+        elif cp.id == "proj-d":
+            cp.percent_complete = 20
+        baseline_projects.append(cp)
+
+    baseline_tasks = []
+    for t in current.tasks:
+        ct = t.model_copy(deep=True)
+        if ct.id == "task-a2":
+            ct.expected_end = end_of_week(anchor).isoformat()
+            ct.percent_complete = 20
+        elif ct.id == "task-a3":
+            ct.expected_start = w1.isoformat()
+            ct.expected_end = end_of_week(w1).isoformat()
+        elif ct.id == "task-a4":
+            ct.expected_start = w2.isoformat()
+            ct.expected_end = end_of_week(w2).isoformat()
+        baseline_tasks.append(ct)
+
+    # Remove Ben's emergency assignment on Alpha (added later)
+    baseline_assignments = [
+        a.model_copy(deep=True)
+        for a in current.assignments
+        if a.id != "asg-5" and a.project_id != "proj-f"
+    ]
+
+    return PlanDocument(
+        projects=baseline_projects,
+        tasks=baseline_tasks,
+        people=current.people,
+        assignments=baseline_assignments,
+        unavailabilities=current.unavailabilities,
+        dependencies=current.dependencies,
+    )

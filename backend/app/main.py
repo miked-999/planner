@@ -11,13 +11,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from .db import get_db_path, init_db
-from .routes import backups, plan, portability
+from .db import ensure_weekly_auto_checkpoint, get_db_path, get_plan_version, init_db
+from .routes import backups, checkpoints, plan, portability
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     init_db()
+    ensure_weekly_auto_checkpoint()
     yield
 
 
@@ -45,11 +46,16 @@ app.add_middleware(
 app.include_router(plan.router)
 app.include_router(portability.router)
 app.include_router(backups.router)
+app.include_router(checkpoints.router)
 
 
 @app.get("/api/health")
-def health() -> dict[str, str]:
-    return {"status": "ok", "db_path": str(get_db_path())}
+def health() -> dict[str, str | int]:
+    return {
+        "status": "ok",
+        "db_path": str(get_db_path()),
+        "plan_version": get_plan_version(),
+    }
 
 
 FRONTEND_DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"

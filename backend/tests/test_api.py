@@ -75,8 +75,9 @@ def test_json_export_and_import_roundtrip(client: TestClient) -> None:
     exp = client.get("/api/export/json")
     assert exp.status_code == 200
     envelope = exp.json()
-    assert envelope["schema_version"] == 1
+    assert envelope["schema_version"] == 2
     assert len(envelope["plan"]["projects"]) == len(seeded["projects"])
+    assert len(envelope["checkpoints"]) >= 1
 
     client.post("/api/plan/clear")
     assert client.get("/api/plan").json()["projects"] == []
@@ -86,6 +87,58 @@ def test_json_export_and_import_roundtrip(client: TestClient) -> None:
     restored = imp.json()
     assert len(restored["projects"]) == 7
     assert len(restored["assignments"]) == len(seeded["assignments"])
+
+
+def test_backwards_compatible_v1_json_import(client: TestClient) -> None:
+    """Ensure legacy schema_version=1 JSON files (without checkpoints, estimated_days, or placeholder_label) import cleanly."""
+    legacy_v1_envelope = {
+        "schema_version": 1,
+        "exported_at": "2026-11-25T10:00:00Z",
+        "plan": {
+            "people": [{"id": "p-1", "name": "Alice Morgan", "sort_order": 0}],
+            "projects": [
+                {
+                    "id": "proj-legacy",
+                    "name": "Legacy v1 Project",
+                    "description": "Exported from initial v0.2 release",
+                    "expected_start": "2026-12-07",
+                    "actual_start": None,
+                    "expected_end": "2026-12-18",
+                    "original_expected_end": "2026-12-18",
+                    "required_by": "2026-12-25",
+                    "actual_end": None,
+                    "percent_complete": 40,
+                    "status": "in_progress",
+                    "priority": "high",
+                    "color": "#2563eb",
+                    "notes": "No estimated_days or auto_progress key",
+                    "sort_order": 0,
+                }
+            ],
+            "tasks": [],
+            "assignments": [
+                {
+                    "id": "asg-legacy",
+                    "person_id": "p-1",
+                    "project_id": "proj-legacy",
+                    "task_id": None,
+                    "allocation_pct": 75,
+                    "start_date": None,
+                    "end_date": None,
+                }
+            ],
+            "unavailabilities": [],
+            "dependencies": [],
+        },
+    }
+
+    res = client.post("/api/import/json", json=legacy_v1_envelope)
+    assert res.status_code == 200
+    imported = res.json()
+    assert len(imported["projects"]) == 1
+    assert imported["projects"][0]["name"] == "Legacy v1 Project"
+    assert imported["projects"][0]["estimated_days"] == 10
+    assert imported["assignments"][0]["allocation_pct"] == 75
 
 
 def test_csv_export_zip_and_project_import(client: TestClient) -> None:
@@ -237,5 +290,56 @@ def test_tbd_placeholder_assignments_and_v1_migration(
             a["person_id"] is None and "Data Engineer" in (a["placeholder_label"] or "")
             for a in body["plan"]["assignments"]
         )
+
+
+def test_checkpoints_manual_auto_weekly_and_restore(client: TestClient) -> None:
+    seeded = client.post("/api/plan/seed").json()
+    assert len(seeded["projects"]) == 7
+
+    # Seed creates both the Q4 Kickoff Baseline AND the current week's auto_weekly checkpoint
+    chk_list = client.get("/api/checkpoints").json()
+    kinds = {c["kind"] for c in chk_list}
+    assert "auto_weekly" in kinds
+    assert "manual" in kinds
+
+    # Create a custom milestone checkpoint with a Why-note
+    create_res = client.post(
+        "/api/checkpoints",
+        json={
+            "label": "Steering Sign-off",
+            "note": "Approved +1w extension on Alpha after resilience review",
+            "kind": "manual",
+        },
+    )
+    assert create_res.status_code == 200
+    created = create_res.json()
+    assert created["label"] == "Steering Sign-off"
+    assert "resilience review" in created["note"]
+
+    # Update note via PATCH
+    patch_res = client.patch(
+        f"/api/checkpoints/{created['id']}",
+        json={"note": "Updated steering note"},
+    )
+    assert patch_res.status_code == 200
+    assert patch_res.json()["note"] == "Updated steering note"
+
+    # Fetch full detail (including embedded plan)
+    detail_res = client.get(f"/api/checkpoints/{created['id']}")
+    assert detail_res.status_code == 200
+    assert len(detail_res.json()["plan"]["projects"]) == 7
+
+    # Clear live plan and restore from checkpoint
+    client.post("/api/plan/clear")
+    assert client.get("/api/plan").json()["projects"] == []
+
+    restored = client.post(f"/api/checkpoints/{created['id']}/restore")
+    assert restored.status_code == 200
+    assert len(restored.json()["projects"]) == 7
+
+    # Delete checkpoint
+    del_res = client.delete(f"/api/checkpoints/{created['id']}")
+    assert del_res.status_code == 200
+
 
 

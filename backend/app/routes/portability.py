@@ -12,9 +12,10 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Response
 from pydantic import ValidationError
 
-from ..db import is_db_non_empty, read_plan, write_plan
+from ..db import import_checkpoints_db, is_db_non_empty, list_checkpoints_db, read_plan, write_plan
 from ..schemas import (
     Assignment,
+    CheckpointDetail,
     CsvImportRequest,
     ExportEnvelope,
     Person,
@@ -40,10 +41,12 @@ PALETTE = [
 @router.get("/export/json")
 def export_json() -> Response:
     plan = read_plan()
+    checkpoints = list_checkpoints_db(include_plan=True)
     envelope = ExportEnvelope(
-        schema_version=1,
+        schema_version=2,
         exported_at=datetime.now(timezone.utc).isoformat(),
         plan=plan,
+        checkpoints=checkpoints,  # type: ignore[arg-type]
     )
     stamp = datetime.now().strftime("%Y-%m-%d")
     return Response(
@@ -55,17 +58,59 @@ def export_json() -> Response:
     )
 
 
+def _normalize_legacy_plan_dict(raw: dict[str, Any]) -> dict[str, Any]:
+    """Ensures v1 / legacy JSON exports (before TBD slots, backlog, or checkpoints) validate cleanly."""
+    normalized = dict(raw)
+    if isinstance(normalized.get("projects"), list):
+        projs = []
+        for p in normalized["projects"]:
+            if isinstance(p, dict):
+                cp = dict(p)
+                cp.setdefault("estimated_days", 10)
+                cp.setdefault("auto_progress", True)
+                projs.append(cp)
+            else:
+                projs.append(p)
+        normalized["projects"] = projs
+
+    if isinstance(normalized.get("assignments"), list):
+        asgs = []
+        for a in normalized["assignments"]:
+            if isinstance(a, dict):
+                ca = dict(a)
+                ca.setdefault("placeholder_label", None)
+                asgs.append(ca)
+            else:
+                asgs.append(a)
+        normalized["assignments"] = asgs
+
+    return normalized
+
+
 @router.post("/import/json", response_model=PlanDocument)
 def import_json(payload: dict[str, Any]) -> PlanDocument:
     try:
         raw_plan = payload.get("plan", payload)
-        validated = PlanDocument.model_validate(raw_plan)
+        if not isinstance(raw_plan, dict):
+            raise ValueError("Expected a JSON object for plan")
+        validated = PlanDocument.model_validate(_normalize_legacy_plan_dict(raw_plan))
+
+        raw_checkpoints = payload.get("checkpoints") or []
+        validated_checkpoints: list[CheckpointDetail] = []
+        for raw_chk in raw_checkpoints:
+            if isinstance(raw_chk, dict) and isinstance(raw_chk.get("plan"), dict):
+                chk_copy = dict(raw_chk)
+                chk_copy["plan"] = _normalize_legacy_plan_dict(chk_copy["plan"])
+                validated_checkpoints.append(CheckpointDetail.model_validate(chk_copy))
     except (ValidationError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=f"Invalid plan JSON: {exc}") from exc
 
     if is_db_non_empty():
         create_snapshot("Auto pre-JSON-import")
-    return write_plan(validated)
+    saved = write_plan(validated)
+    if validated_checkpoints:
+        import_checkpoints_db(validated_checkpoints)
+    return saved
 
 
 def _write_csv_string(headers: list[str], rows: list[list[Any]]) -> str:

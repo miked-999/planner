@@ -195,3 +195,72 @@ export interface CascadePreview {
   availabilityDeltas: PersonAvailabilityDelta[];
   hasDownstreamChanges: boolean;
 }
+
+export type CheckpointKind = 'manual' | 'auto_weekly' | 'what_if';
+
+export interface CheckpointSummary {
+  id: string;
+  label: string;
+  note: string;
+  kind: CheckpointKind;
+  week_key?: string | null;
+  created_by: string;
+  created_at: string;
+  plan_version: number;
+  project_count: number;
+  people_count: number;
+}
+
+export interface CheckpointDetail extends CheckpointSummary {
+  plan: PlanDocument;
+}
+
+export type ProjectChangeType =
+  | 'added'
+  | 'removed'
+  | 'newly_scheduled'
+  | 'moved_to_backlog'
+  | 'modified';
+
+export interface ProjectDiffItem {
+  projectId: string;
+  name: string;
+  color: string;
+  changeType: ProjectChangeType;
+  baselineStart: string | null;
+  baselineEnd: string | null;
+  currentStart: string | null;
+  currentEnd: string | null;
+  startShiftDays: number | null;
+  endShiftDays: number | null;
+  baselineStatus: ProjectStatus | null;
+  currentStatus: ProjectStatus | null;
+  baselinePercent: number | null;
+  currentPercent: number | null;
+  newlyLate: boolean;
+  resolvedLate: boolean;
+  addedPeople: string[];
+  removedPeople: string[];
+  allocationChanges: { name: string; beforePct: number; afterPct: number }[];
+}
+
+export interface BaselineBarSpan {
+  start: string;
+  end: string;
+  endShiftDays: number | null;
+}
+
+export interface PlanDiffReport {
+  projectDiffs: ProjectDiffItem[];
+  ghostBars: Record<string, BaselineBarSpan>;
+  addedEntityKeys: string[];
+  summary: {
+    totalChangedProjects: number;
+    slippedCount: number;
+    pulledInCount: number;
+    addedCount: number;
+    removedCount: number;
+    completedSinceCount: number;
+    reassignedCount: number;
+  };
+}

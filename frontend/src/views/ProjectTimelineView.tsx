@@ -20,6 +20,7 @@ import {
   calendarDaysBetween,
   formatDurationLabel,
   formatShortDate,
+  formatSignedWorkingDays,
   generateWeeks,
   mondayOfWeek,
   snapToWorkingDay,
@@ -43,6 +44,7 @@ const DAY_WIDTH_BY_ZOOM: Record<ZoomMode, number> = {
 };
 
 const ROW_HEIGHT = 40;
+const ROW_HEIGHT_COMPARE = 48;
 const SIDEBAR_COL_WIDTH = 280;
 
 interface TimelineRow {
@@ -82,6 +84,8 @@ export function ProjectTimelineView() {
     plan,
     todayIso,
     isPresentationMode,
+    activeBaseline,
+    comparisonDiff,
     selectedEntity,
     setSelectedEntity,
     commitWithCascadeCheck,
@@ -109,6 +113,7 @@ export function ProjectTimelineView() {
 
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const dayPx = DAY_WIDTH_BY_ZOOM[zoom];
+  const activeRowHeight = activeBaseline ? ROW_HEIGHT_COMPARE : ROW_HEIGHT;
 
   const peopleById = useMemo(
     () => new Map(plan.people.map((p) => [p.id, p.name])),
@@ -246,8 +251,12 @@ export function ProjectTimelineView() {
   ]);
 
   const { timelineStart, weeks, totalWidth } = useMemo(() => {
+    const ghostDates = comparisonDiff
+      ? Object.values(comparisonDiff.ghostBars).flatMap((g) => [g.start, g.end])
+      : [];
     const allDates = [
       todayIso,
+      ...ghostDates,
       ...plan.projects
         .flatMap((p) => [p.expected_start, p.expected_end, p.required_by])
         .filter((d): d is string => Boolean(d)),
@@ -260,7 +269,7 @@ export function ProjectTimelineView() {
       weeks: wk,
       totalWidth: wk.length * 7 * dayPx,
     };
-  }, [plan.projects, todayIso, dayPx]);
+  }, [plan.projects, comparisonDiff, todayIso, dayPx]);
 
   const monthSpans = useMemo(() => {
     const spans: { key: string; label: string; weekCount: number }[] = [];
@@ -565,6 +574,12 @@ export function ProjectTimelineView() {
           className="hidden xl:flex items-center gap-3 text-[11px]"
           style={{ color: 'var(--text-secondary)' }}
         >
+          {activeBaseline && (
+            <span className="inline-flex items-center gap-1 text-indigo-600 dark:text-indigo-400 font-medium">
+              <span className="w-3.5 h-2 rounded-xs border border-dashed border-indigo-500 bg-indigo-500/20 inline-block" />
+              Baseline ghost
+            </span>
+          )}
           <span className="inline-flex items-center gap-1">
             <Diamond className="w-3 h-3 text-amber-500 fill-amber-500" aria-hidden="true" />
             Required-by
@@ -829,7 +844,7 @@ export function ProjectTimelineView() {
               style={{
                 left: SIDEBAR_COL_WIDTH,
                 width: totalWidth,
-                height: rows.length * ROW_HEIGHT,
+                height: rows.length * activeRowHeight,
               }}
             >
               <defs>
@@ -865,9 +880,9 @@ export function ProjectTimelineView() {
                 const toDates = previewRowDates(toEntry.row);
 
                 const x1 = dateToX(fromDates.end) + dayPx;
-                const y1 = fromEntry.idx * ROW_HEIGHT + ROW_HEIGHT / 2;
+                const y1 = fromEntry.idx * activeRowHeight + activeRowHeight / 2;
                 const x2 = dateToX(toDates.start);
-                const y2 = toEntry.idx * ROW_HEIGHT + ROW_HEIGHT / 2;
+                const y2 = toEntry.idx * activeRowHeight + activeRowHeight / 2;
 
                 const isViolated = violatedDeps.has(dep.id);
                 const stub = 10;
@@ -925,11 +940,22 @@ export function ProjectTimelineView() {
                   ? Math.max(0, barLeft + barWidth - lateSegmentLeft)
                   : 0;
 
+              const ghostSpan = comparisonDiff?.ghostBars[row.key] ?? null;
+              const isAddedSinceBaseline =
+                comparisonDiff?.addedEntityKeys.includes(row.key) ?? false;
+              const ghostLeft = ghostSpan ? dateToX(ghostSpan.start) : 0;
+              const ghostWidth = ghostSpan
+                ? Math.max(
+                    dayPx,
+                    (calendarDaysBetween(ghostSpan.start, ghostSpan.end) + 1) * dayPx,
+                  )
+                : 0;
+
               return (
                 <div
                   key={row.key}
                   style={{
-                    height: ROW_HEIGHT,
+                    height: activeRowHeight,
                     borderColor: 'var(--border-default)',
                   }}
                   className={`flex border-b group ${
@@ -993,6 +1019,12 @@ export function ProjectTimelineView() {
                       >
                         {row.name}
                       </button>
+
+                      {isAddedSinceBaseline && (
+                        <span className="px-1 py-0.2 rounded bg-emerald-500/15 text-[9px] font-bold text-emerald-700 dark:text-emerald-300 shrink-0">
+                          NEW
+                        </span>
+                      )}
 
                       {row.tbdCount > 0 && (
                         <span
@@ -1067,7 +1099,7 @@ export function ProjectTimelineView() {
                   {/* Timeline Row Canvas (also accepts dropping a backlog card onto any week!) */}
                   <div
                     className="relative"
-                    style={{ width: totalWidth, height: ROW_HEIGHT }}
+                    style={{ width: totalWidth, height: activeRowHeight }}
                   >
                     <div className="absolute inset-0 flex">
                       {weeks.map((w) => (
@@ -1134,6 +1166,24 @@ export function ProjectTimelineView() {
                       </div>
                     )}
 
+                    {/* Baseline Checkpoint Ghost Bar */}
+                    {ghostSpan && activeBaseline && (
+                      <div
+                        title={`Baseline "${activeBaseline.label}": ${formatShortDate(ghostSpan.start)} → ${formatShortDate(ghostSpan.end)}${
+                          ghostSpan.endShiftDays
+                            ? ` (${formatSignedWorkingDays(ghostSpan.endShiftDays)} vs baseline)`
+                            : ''
+                        }`}
+                        style={{
+                          left: ghostLeft,
+                          width: ghostWidth,
+                          top: row.entityType === 'project' ? 34 : 31,
+                          height: 8,
+                        }}
+                        className="absolute z-12 rounded-xs border border-dashed border-indigo-500/75 bg-indigo-500/20 pointer-events-none"
+                      />
+                    )}
+
                     <div
                       role="button"
                       tabIndex={0}
@@ -1158,6 +1208,10 @@ export function ProjectTimelineView() {
                       }}
                       onPointerDown={(e) => startBarPointerDrag(e, row, 'move')}
                       title={`${row.name}\n${formatShortDate(dates.start)} → ${formatShortDate(dates.end)} (${row.percentComplete}% complete)${
+                        ghostSpan && activeBaseline
+                          ? `\nBaseline (${activeBaseline.label}): ${formatShortDate(ghostSpan.start)} → ${formatShortDate(ghostSpan.end)}`
+                          : ''
+                      }${
                         row.assigneeNames.length
                           ? `\nAssigned: ${row.assigneeNames.join(', ')}`
                           : ''
@@ -1169,8 +1223,14 @@ export function ProjectTimelineView() {
                       style={{
                         left: barLeft,
                         width: barWidth,
-                        top: row.entityType === 'project' ? 7 : 10,
-                        height: row.entityType === 'project' ? 26 : 20,
+                        top: activeBaseline
+                          ? row.entityType === 'project'
+                            ? 6
+                            : 9
+                          : row.entityType === 'project'
+                            ? 7
+                            : 10,
+                        height: row.entityType === 'project' ? 25 : 20,
                         backgroundColor: `${row.color}30`,
                         borderColor: row.color,
                       }}
@@ -1231,6 +1291,22 @@ export function ProjectTimelineView() {
                         />
                       )}
                     </div>
+
+                    {/* Signed Slip Pill vs Active Baseline */}
+                    {ghostSpan &&
+                      ghostSpan.endShiftDays !== null &&
+                      ghostSpan.endShiftDays !== 0 && (
+                        <span
+                          style={{ left: barLeft + barWidth + 6, top: 8 }}
+                          className={`absolute z-15 px-1.5 py-0.2 rounded text-[10px] font-semibold pointer-events-none ${
+                            ghostSpan.endShiftDays > 0
+                              ? 'bg-red-500/15 text-red-600 dark:text-red-400'
+                              : 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                          }`}
+                        >
+                          {formatSignedWorkingDays(ghostSpan.endShiftDays)}
+                        </span>
+                      )}
 
                     {dragState?.rowKey === row.key && dragState.deltaWorkingDays !== 0 && (
                       <div

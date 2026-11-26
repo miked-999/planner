@@ -18,6 +18,7 @@ export function SnapshotModal() {
     plan,
     todayIso,
     activeView,
+    activeBaseline,
     snapshotModalOpen,
     setSnapshotModalOpen,
   } = usePlan();
@@ -27,6 +28,7 @@ export function SnapshotModal() {
   const [customStart, setCustomStart] = useState(todayIso);
   const [customEnd, setCustomEnd] = useState(() => addCalendarDays(todayIso, 84));
   const [includeTasks, setIncludeTasks] = useState(true);
+  const [includeBaselineGhost, setIncludeBaselineGhost] = useState(true);
   const [title, setTitle] = useState('Team Project & Resource Plan');
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
   const [statusMessage, setStatusMessage] = useState('');
@@ -72,6 +74,7 @@ export function SnapshotModal() {
 
   const { canvas, previewUrl } = useMemo(() => {
     if (!snapshotModalOpen) return { canvas: null, previewUrl: '' };
+    const useGhost = Boolean(activeBaseline && includeBaselineGhost && kind === 'roadmap');
     const c = renderPlanSnapshotCanvas(plan, {
       kind,
       title,
@@ -79,9 +82,22 @@ export function SnapshotModal() {
       endIso,
       includeTasks,
       todayIso,
+      baselinePlan: useGhost ? activeBaseline!.plan : null,
+      baselineLabel: useGhost ? activeBaseline!.label : null,
     });
     return { canvas: c, previewUrl: c.toDataURL('image/png') };
-  }, [snapshotModalOpen, plan, kind, title, startIso, endIso, includeTasks, todayIso]);
+  }, [
+    snapshotModalOpen,
+    plan,
+    kind,
+    title,
+    startIso,
+    endIso,
+    includeTasks,
+    includeBaselineGhost,
+    activeBaseline,
+    todayIso,
+  ]);
 
   const announceCopyStatus = (ok: boolean) => {
     if (copyTimerRef.current) window.clearTimeout(copyTimerRef.current);
@@ -197,14 +213,27 @@ export function SnapshotModal() {
           )}
 
           {kind === 'roadmap' && (
-            <label className="inline-flex items-center gap-1.5 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={includeTasks}
-                onChange={(e) => setIncludeTasks(e.target.checked)}
-              />
-              <span>Include project phases / subtasks</span>
-            </label>
+            <div className="flex flex-wrap items-center gap-4">
+              <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={includeTasks}
+                  onChange={(e) => setIncludeTasks(e.target.checked)}
+                />
+                <span>Include project phases / subtasks</span>
+              </label>
+
+              {activeBaseline && (
+                <label className="inline-flex items-center gap-1.5 cursor-pointer text-indigo-700 dark:text-indigo-300 font-medium">
+                  <input
+                    type="checkbox"
+                    checked={includeBaselineGhost}
+                    onChange={(e) => setIncludeBaselineGhost(e.target.checked)}
+                  />
+                  <span>Include baseline ghost bars ({activeBaseline.label})</span>
+                </label>
+              )}
+            </div>
           )}
         </div>
 

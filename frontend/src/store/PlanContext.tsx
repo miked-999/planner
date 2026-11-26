@@ -10,6 +10,7 @@ import React, {
 import { computeWeeklyCapacityMatrix } from '../engine/capacity';
 import { addWorkingDays, generateWeeks, snapToWorkingDay, todayIsoLocal } from '../engine/dates';
 import { canAddDependency, previewDependencyCascade } from '../engine/dependencies';
+import { comparePlans } from '../engine/diff';
 import {
   computeScheduleMetrics,
   recalculateProjectRollups,
@@ -19,8 +20,10 @@ import {
 import type {
   Assignment,
   CascadePreview,
+  CheckpointDetail,
   Dependency,
   Person,
+  PlanDiffReport,
   PlanDocument,
   Project,
   Task,
@@ -88,6 +91,14 @@ interface PlanContextValue {
   setPortabilityModalOpen: (open: boolean) => void;
   snapshotModalOpen: boolean;
   setSnapshotModalOpen: (open: boolean) => void;
+  checkpointsModalOpen: boolean;
+  setCheckpointsModalOpen: (open: boolean) => void;
+  compareSummaryModalOpen: boolean;
+  setCompareSummaryModalOpen: (open: boolean) => void;
+  activeBaseline: CheckpointDetail | null;
+  comparisonDiff: PlanDiffReport | null;
+  selectBaselineForCompare: (checkpointId: string) => Promise<void>;
+  clearBaselineCompare: () => void;
   isPresentationMode: boolean;
   setIsPresentationMode: (active: boolean) => void;
 
@@ -102,7 +113,7 @@ interface PlanContextValue {
   whatIfStepCount: number;
   whatIfSummary: WhatIfSummary | null;
   enterWhatIfMode: () => void;
-  applyWhatIfChanges: () => void;
+  applyWhatIfChanges: (whyNote?: string) => void;
   discardWhatIfChanges: () => void;
 
   // Cascade Preview
@@ -198,6 +209,9 @@ export function PlanProvider({ children }: { children: React.ReactNode }) {
   const [teamDrawerOpen, setTeamDrawerOpen] = useState(false);
   const [portabilityModalOpen, setPortabilityModalOpen] = useState(false);
   const [snapshotModalOpen, setSnapshotModalOpen] = useState(false);
+  const [checkpointsModalOpen, setCheckpointsModalOpen] = useState(false);
+  const [compareSummaryModalOpen, setCompareSummaryModalOpen] = useState(false);
+  const [activeBaseline, setActiveBaseline] = useState<CheckpointDetail | null>(null);
   const [isPresentationMode, setIsPresentationMode] = useState(false);
   const [pendingCascade, setPendingCascade] = useState<CascadePreview | null>(null);
 
@@ -205,6 +219,27 @@ export function PlanProvider({ children }: { children: React.ReactNode }) {
   const saveCounterRef = useRef(0);
 
   const plan = isWhatIfMode && whatIfPlan ? whatIfPlan : livePlan;
+
+  const comparisonDiff = useMemo<PlanDiffReport | null>(() => {
+    if (!activeBaseline) return null;
+    return comparePlans(activeBaseline.plan, plan);
+  }, [activeBaseline, plan]);
+
+  const selectBaselineForCompare = useCallback(async (checkpointId: string) => {
+    try {
+      const detail = await api.getCheckpoint(checkpointId);
+      setActiveBaseline(detail);
+    } catch (err) {
+      setErrorMessage(
+        err instanceof Error ? err.message : 'Failed to load checkpoint for comparison',
+      );
+    }
+  }, []);
+
+  const clearBaselineCompare = useCallback(() => {
+    setActiveBaseline(null);
+    setCompareSummaryModalOpen(false);
+  }, []);
 
   const persistLivePlan = useCallback(async (nextLive: PlanDocument) => {
     const seq = ++saveCounterRef.current;
@@ -365,21 +400,36 @@ export function PlanProvider({ children }: { children: React.ReactNode }) {
     setIsWhatIfMode(true);
   }, [livePlan]);
 
-  const applyWhatIfChanges = useCallback(() => {
-    if (!whatIfPlan) {
+  const applyWhatIfChanges = useCallback(
+    (whyNote?: string) => {
+      if (!whatIfPlan) {
+        setIsWhatIfMode(false);
+        return;
+      }
+      const normalized = recalculateProjectRollups(whatIfPlan);
+      setUndoStack((u) => [...u.slice(-(MAX_HISTORY - 1)), livePlan]);
+      setRedoStack([]);
+      setLivePlan(normalized);
       setIsWhatIfMode(false);
-      return;
-    }
-    const normalized = recalculateProjectRollups(whatIfPlan);
-    setUndoStack((u) => [...u.slice(-(MAX_HISTORY - 1)), livePlan]);
-    setRedoStack([]);
-    setLivePlan(normalized);
-    setIsWhatIfMode(false);
-    setWhatIfPlan(null);
-    setWhatIfUndo([]);
-    setWhatIfRedo([]);
-    void persistLivePlan(normalized);
-  }, [whatIfPlan, livePlan, persistLivePlan]);
+      setWhatIfPlan(null);
+      setWhatIfUndo([]);
+      setWhatIfRedo([]);
+      void persistLivePlan(normalized).then(() => {
+        const trimmedNote = whyNote?.trim() ?? '';
+        if (trimmedNote) {
+          void api
+            .createCheckpoint({
+              label: `What-if Applied — ${todayIso}`,
+              note: trimmedNote,
+              kind: 'what_if',
+              plan: normalized,
+            })
+            .catch(() => {});
+        }
+      });
+    },
+    [whatIfPlan, livePlan, persistLivePlan, todayIso],
+  );
 
   const discardWhatIfChanges = useCallback(() => {
     setIsWhatIfMode(false);
@@ -960,6 +1010,14 @@ export function PlanProvider({ children }: { children: React.ReactNode }) {
       setPortabilityModalOpen,
       snapshotModalOpen,
       setSnapshotModalOpen,
+      checkpointsModalOpen,
+      setCheckpointsModalOpen,
+      compareSummaryModalOpen,
+      setCompareSummaryModalOpen,
+      activeBaseline,
+      comparisonDiff,
+      selectBaselineForCompare,
+      clearBaselineCompare,
       isPresentationMode,
       setIsPresentationMode,
       canUndo,
@@ -1012,6 +1070,12 @@ export function PlanProvider({ children }: { children: React.ReactNode }) {
       teamDrawerOpen,
       portabilityModalOpen,
       snapshotModalOpen,
+      checkpointsModalOpen,
+      compareSummaryModalOpen,
+      activeBaseline,
+      comparisonDiff,
+      selectBaselineForCompare,
+      clearBaselineCompare,
       isPresentationMode,
       canUndo,
       canRedo,

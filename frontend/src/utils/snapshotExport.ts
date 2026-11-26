@@ -11,6 +11,7 @@ import {
   generateWeeks,
 } from '../engine/dates';
 import { findViolatedDependencyIds } from '../engine/dependencies';
+import { comparePlans } from '../engine/diff';
 import { computeScheduleMetrics } from '../engine/rollup';
 import type { EntityType, PlanDocument } from '../types/plan';
 
@@ -23,6 +24,8 @@ export interface SnapshotOptions {
   endIso: string;
   includeTasks: boolean;
   todayIso: string;
+  baselinePlan?: PlanDocument | null;
+  baselineLabel?: string | null;
 }
 
 const FONT_STACK = '-apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif';
@@ -139,7 +142,8 @@ function renderRoadmapCanvas(
   const totalW = leftColW + timelineW + 32;
   const headerTop = 68;
   const gridHeaderH = 48;
-  const rowH = 36;
+  const diff = opts.baselinePlan ? comparePlans(opts.baselinePlan, plan) : null;
+  const rowH = diff ? 42 : 36;
 
   const peopleById = new Map(plan.people.map((p) => [p.id, p.name]));
 
@@ -240,13 +244,15 @@ function renderRoadmapCanvas(
     totalW,
     opts.title || 'Project Roadmap',
     `${formatMediumDate(rangeStart)} – ${formatMediumDate(rangeEnd)} · As of ${formatMediumDate(opts.todayIso)}${
-      backlogCount > 0 ? ` · ${backlogCount} unscheduled in backlog` : ''
-    }`,
+      opts.baselineLabel ? ` · vs. "${opts.baselineLabel}"` : ''
+    }${backlogCount > 0 ? ` · ${backlogCount} unscheduled in backlog` : ''}`,
     [
       { color: '#10b981', label: 'On track' },
       { color: '#f59e0b', label: 'Required-by / Tight' },
       { color: '#ef4444', label: 'Late / Conflict' },
-      { color: '#d97706', label: 'TBD Slot', dashed: true },
+      ...(diff
+        ? [{ color: '#6366f1', label: 'Baseline Ghost', dashed: true }]
+        : [{ color: '#d97706', label: 'TBD Slot', dashed: true }]),
     ],
   );
 
@@ -355,8 +361,8 @@ function renderRoadmapCanvas(
     const x2 = Math.min(gridLeft + timelineW, rawX2);
 
     if (x2 > x1) {
-      const bh = r.type === 'project' ? 22 : 16;
-      const by = ry + (rowH - bh) / 2;
+      const bh = r.type === 'project' ? 20 : 15;
+      const by = diff ? ry + 5 : ry + (rowH - bh) / 2;
       const bw = Math.max(4, x2 - x1);
 
       ctx.fillStyle = `${r.color}28`;
@@ -381,6 +387,23 @@ function renderRoadmapCanvas(
         const barLabel =
           bw > 130 && r.assignees ? `${r.pct}% · ${r.assignees}` : `${r.pct}%`;
         ctx.fillText(truncateText(ctx, barLabel, bw - 12), x1 + 6, by + bh / 2 + 3.5);
+      }
+    }
+
+    // Optional Baseline Ghost Bar under live bar
+    const ghost = diff?.ghostBars[r.key];
+    if (ghost) {
+      const gx1 = Math.max(gridLeft, dateToX(ghost.start));
+      const gx2 = Math.min(gridLeft + timelineW, dateToX(ghost.end) + dayPx);
+      if (gx2 > gx1) {
+        ctx.fillStyle = 'rgba(99, 102, 241, 0.18)';
+        roundRect(ctx, gx1, ry + 29, gx2 - gx1, 7, 2);
+        ctx.fill();
+        ctx.strokeStyle = '#6366f1';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 2]);
+        ctx.stroke();
+        ctx.setLineDash([]);
       }
     }
 

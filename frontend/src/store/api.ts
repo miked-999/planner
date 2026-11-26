@@ -1,4 +1,10 @@
-import type { BackupInfo, PlanDocument } from '../types/plan';
+import type {
+  BackupInfo,
+  CheckpointDetail,
+  CheckpointKind,
+  CheckpointSummary,
+  PlanDocument,
+} from '../types/plan';
 
 async function handleJson<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -83,6 +89,55 @@ export const api = {
       method: 'DELETE',
     }).then((r) => {
       if (!r.ok) throw new Error('Failed to delete backup');
+    });
+  },
+
+  listCheckpoints(): Promise<CheckpointSummary[]> {
+    return fetch('/api/checkpoints').then((r) => handleJson<CheckpointSummary[]>(r));
+  },
+
+  getCheckpoint(checkpointId: string): Promise<CheckpointDetail> {
+    return fetch(`/api/checkpoints/${encodeURIComponent(checkpointId)}`).then((r) =>
+      handleJson<CheckpointDetail>(r),
+    );
+  },
+
+  createCheckpoint(payload: {
+    label: string;
+    note?: string;
+    kind?: CheckpointKind;
+    plan?: PlanDocument;
+  }): Promise<CheckpointSummary> {
+    return fetch('/api/checkpoints', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).then((r) => handleJson<CheckpointSummary>(r));
+  },
+
+  updateCheckpoint(
+    checkpointId: string,
+    payload: { label?: string; note?: string },
+  ): Promise<CheckpointSummary> {
+    return fetch(`/api/checkpoints/${encodeURIComponent(checkpointId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).then((r) => handleJson<CheckpointSummary>(r));
+  },
+
+  restoreCheckpoint(checkpointId: string): Promise<PlanDocument> {
+    return fetch(
+      `/api/checkpoints/${encodeURIComponent(checkpointId)}/restore`,
+      { method: 'POST' },
+    ).then((r) => handleJson<PlanDocument>(r));
+  },
+
+  deleteCheckpoint(checkpointId: string): Promise<void> {
+    return fetch(`/api/checkpoints/${encodeURIComponent(checkpointId)}`, {
+      method: 'DELETE',
+    }).then((r) => {
+      if (!r.ok) throw new Error('Failed to delete checkpoint');
     });
   },
 };

@@ -100,6 +100,7 @@ backend\.venv\Scripts\pytest backend -v
 ## Key Capabilities & Data Storage
 
 - **Local SQLite Database**: Stored automatically at `data/planner.db` (WAL mode, auto-saved on every edit).
+- **Checkpoints, Auto-Weekly Baselines & Visual Diff**: Save named milestone checkpoints with *Why-notes*, rely on automatic rolling weekly baselines (retaining the latest 12 weeks), and compare any checkpoint against the current plan via **Ghost Bars** on the Gantt chart and a **Delta Summary** table.
 - **Local Snapshots**: One-click hot backups and restore stored in `data/backups/*.db`.
 - **Unscheduled Backlog**: Capture upcoming projects before dates or people are known (`+ Backlog`), estimate rough effort in working days, and drag them onto any week column on the Gantt chart when capacity opens up.
 - **TBD Demand Slots & "Who fits?"**: Add unassigned `TBD` roles on projects or phases and rank team members by real free capacity.

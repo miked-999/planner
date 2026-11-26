@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, model_validator
 ProjectStatus = Literal["backlog", "planned", "in_progress", "on_hold", "completed"]
 PriorityLevel = Literal["low", "medium", "high"]
 EntityType = Literal["project", "task"]
+CheckpointKind = Literal["manual", "auto_weekly", "what_if"]
 
 
 def _parse_iso_date(val: str, field_name: str) -> date:
@@ -306,10 +307,41 @@ class PlanDocument(BaseModel):
         return self
 
 
+class CheckpointSummary(BaseModel):
+    id: str = Field(min_length=1)
+    label: str = Field(min_length=1, max_length=120)
+    note: str = Field(default="", max_length=1000)
+    kind: CheckpointKind = "manual"
+    week_key: str | None = None
+    created_by: str = Field(default="Local User", max_length=120)
+    created_at: str
+    plan_version: int = 1
+    project_count: int = 0
+    people_count: int = 0
+
+
+class CheckpointDetail(CheckpointSummary):
+    plan: PlanDocument
+
+
+class CheckpointCreateRequest(BaseModel):
+    label: str = Field(min_length=1, max_length=120)
+    note: str = Field(default="", max_length=1000)
+    kind: CheckpointKind = "manual"
+    created_by: str = Field(default="Local User", max_length=120)
+    plan: PlanDocument | None = None
+
+
+class CheckpointUpdateRequest(BaseModel):
+    label: str | None = Field(default=None, min_length=1, max_length=120)
+    note: str | None = Field(default=None, max_length=1000)
+
+
 class ExportEnvelope(BaseModel):
-    schema_version: int = 1
+    schema_version: int = 2
     exported_at: str
     plan: PlanDocument
+    checkpoints: list[CheckpointDetail] = Field(default_factory=list)
 
 
 class BackupCreateRequest(BaseModel):

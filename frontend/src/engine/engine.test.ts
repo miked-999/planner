@@ -14,6 +14,7 @@ import {
   workingDaysSignedDiff,
 } from './dates';
 import { canAddDependency, previewDependencyCascade } from './dependencies';
+import { comparePlans } from './diff';
 import {
   computeScheduleMetrics,
   recalculateProjectRollups,
@@ -326,6 +327,72 @@ describe('capacity, mid-week handoff, and rollup rules', () => {
     expect(bScheduled.status).toBe('planned');
     expect(bScheduled.expected_start).toBe('2026-03-09');
     expect(bScheduled.expected_end).toBe('2026-03-27'); // 3 working weeks
+  });
+});
+
+describe('plan checkpoint comparison & ghost bar diff engine', () => {
+  it('computes schedule slips, added/removed projects, reassignments, and ghost bars', () => {
+    const baseline = basePlan();
+    const current = structuredClone(baseline);
+
+    // 1. Slip Project A by +5 working days (Feb 13 -> Feb 20) and reassign Alice 100% -> 50% + add Ben 50%
+    current.projects[0].expected_end = '2026-02-20';
+    current.assignments[0].allocation_pct = 50;
+    current.assignments.push({
+      id: 'asg-ben-a',
+      person_id: 'p-ben',
+      project_id: 'proj-a',
+      task_id: null,
+      allocation_pct: 50,
+      start_date: null,
+      end_date: null,
+    });
+
+    // 2. Complete Project C
+    current.projects[2].status = 'completed';
+    current.projects[2].percent_complete = 100;
+
+    // 3. Add new Project D
+    current.projects.push({
+      id: 'proj-d',
+      name: 'Project D',
+      description: '',
+      expected_start: '2026-03-16',
+      actual_start: null,
+      expected_end: '2026-03-27',
+      estimated_days: 10,
+      original_expected_end: '2026-03-27',
+      required_by: null,
+      actual_end: null,
+      percent_complete: 0,
+      auto_progress: false,
+      status: 'planned',
+      priority: 'medium',
+      color: '#d97706',
+      notes: '',
+      sort_order: 3,
+    });
+
+    const diff = comparePlans(baseline, current);
+    expect(diff.summary.slippedCount).toBe(1);
+    expect(diff.summary.addedCount).toBe(1);
+    expect(diff.summary.completedSinceCount).toBe(1);
+    expect(diff.summary.reassignedCount).toBe(1);
+
+    // Verify ghost bar for Project A preserves baseline dates and +5 wd slip
+    expect(diff.ghostBars['project:proj-a']).toEqual({
+      start: '2026-02-02',
+      end: '2026-02-13',
+      endShiftDays: 5,
+    });
+    expect(diff.addedEntityKeys).toContain('project:proj-d');
+
+    const projADiff = diff.projectDiffs.find((d) => d.projectId === 'proj-a')!;
+    expect(projADiff.endShiftDays).toBe(5);
+    expect(projADiff.addedPeople).toContain('Ben (50%)');
+    expect(projADiff.allocationChanges).toEqual([
+      { name: 'Alice', beforePct: 100, afterPct: 50 },
+    ]);
   });
 });
 

@@ -10,6 +10,8 @@ import {
   Eye,
   FlaskConical,
   GanttChart,
+  GitCompareArrows,
+  History,
   Inbox,
   LayoutDashboard,
   Moon,
@@ -17,6 +19,7 @@ import {
   Redo2,
   Sun,
   Table2,
+  TableProperties,
   Undo2,
   UserCog,
   Users,
@@ -128,18 +131,25 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     setPortabilityModalOpen,
     snapshotModalOpen,
     setSnapshotModalOpen,
+    checkpointsModalOpen,
+    setCheckpointsModalOpen,
+    setCompareSummaryModalOpen,
+    activeBaseline,
+    comparisonDiff,
+    clearBaselineCompare,
     isPresentationMode,
     setIsPresentationMode,
   } = usePlan();
 
   const [collapsed, setCollapsed] = useState(false);
+  const [whatIfNote, setWhatIfNote] = useState('');
   const backlogCount = plan.projects.filter(
     (p) => !p.expected_start || !p.expected_end || p.status === 'backlog',
   ).length;
 
   // Allow pressing Escape to exit Presentation Mode when no modal is open
   useEffect(() => {
-    if (!isPresentationMode || snapshotModalOpen) return;
+    if (!isPresentationMode || snapshotModalOpen || checkpointsModalOpen) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setIsPresentationMode(false);
@@ -147,7 +157,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [isPresentationMode, snapshotModalOpen, setIsPresentationMode]);
+  }, [isPresentationMode, snapshotModalOpen, checkpointsModalOpen, setIsPresentationMode]);
 
   return (
     <div className="h-screen flex flex-col overflow-hidden">
@@ -195,6 +205,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </nav>
 
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setCheckpointsModalOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border cursor-pointer hover:opacity-85"
+              style={{ borderColor: 'var(--border-default)' }}
+            >
+              <History className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>Compare</span>
+            </button>
             <button
               type="button"
               onClick={() => setSnapshotModalOpen(true)}
@@ -311,6 +330,30 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 What-if Active
               </span>
             )}
+
+            {/* Checkpoints / Baselines / Compare */}
+            <button
+              type="button"
+              onClick={() => setCheckpointsModalOpen(true)}
+              title="Save plan checkpoints or compare against a baseline"
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border cursor-pointer transition-colors ${
+                activeBaseline
+                  ? 'border-indigo-500/60 bg-indigo-500/12 text-indigo-700 dark:text-indigo-300 font-semibold'
+                  : 'hover:opacity-85'
+              }`}
+              style={
+                activeBaseline
+                  ? undefined
+                  : {
+                      borderColor: 'var(--border-default)',
+                      backgroundColor: 'var(--bg-surface)',
+                      color: 'var(--text-primary)',
+                    }
+              }
+            >
+              <History className="w-3.5 h-3.5" aria-hidden="true" />
+              <span className="hidden lg:inline">Checkpoints</span>
+            </button>
 
             {/* Presentation Mode */}
             <button
@@ -431,22 +474,104 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </span>
             )}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              type="text"
+              value={whatIfNote}
+              onChange={(e) => setWhatIfNote(e.target.value)}
+              placeholder="Optional why-note (saves checkpoint on apply)…"
+              aria-label="Optional why-note when applying What-if changes"
+              className="w-64 px-2.5 py-1 rounded-md border border-amber-600/35 text-xs"
+              style={{ backgroundColor: 'var(--bg-surface)' }}
+            />
             <button
               type="button"
-              onClick={discardWhatIfChanges}
+              onClick={() => {
+                setWhatIfNote('');
+                discardWhatIfChanges();
+              }}
               className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium border border-amber-600/30 hover:bg-amber-500/15 cursor-pointer"
             >
               <X className="w-3.5 h-3.5" aria-hidden="true" />
-              Discard Changes
+              Discard
             </button>
             <button
               type="button"
-              onClick={applyWhatIfChanges}
+              onClick={() => {
+                applyWhatIfChanges(whatIfNote);
+                setWhatIfNote('');
+              }}
               className="inline-flex items-center gap-1 px-3 py-1 rounded-md text-xs font-semibold bg-amber-600 hover:bg-amber-700 text-white cursor-pointer"
             >
               <Check className="w-3.5 h-3.5" aria-hidden="true" />
               Apply Changes
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Active Baseline Comparison Banner */}
+      {activeBaseline && comparisonDiff && (
+        <div className="shrink-0 bg-indigo-500/12 border-b border-indigo-500/35 px-4 py-2 flex flex-wrap items-center justify-between gap-3 text-xs print:hidden">
+          <div className="flex flex-wrap items-center gap-2 min-w-0">
+            <span className="font-semibold text-indigo-700 dark:text-indigo-300 inline-flex items-center gap-1.5">
+              <GitCompareArrows className="w-4 h-4 shrink-0" aria-hidden="true" />
+              <span>Comparing vs. &ldquo;{activeBaseline.label}&rdquo;</span>
+            </span>
+            {activeBaseline.note && (
+              <span
+                className="hidden lg:inline truncate max-w-xs italic"
+                style={{ color: 'var(--text-secondary)' }}
+                title={activeBaseline.note}
+              >
+                — &ldquo;{activeBaseline.note}&rdquo;
+              </span>
+            )}
+            <span className="inline-flex items-center gap-1.5 ml-1">
+              {comparisonDiff.summary.slippedCount > 0 && (
+                <span className="px-2 py-0.5 rounded bg-red-500/15 text-red-600 dark:text-red-400 font-semibold">
+                  {comparisonDiff.summary.slippedCount} slipped
+                </span>
+              )}
+              {comparisonDiff.summary.addedCount > 0 && (
+                <span className="px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 font-semibold">
+                  +{comparisonDiff.summary.addedCount} added
+                </span>
+              )}
+              {comparisonDiff.summary.reassignedCount > 0 && (
+                <span className="px-2 py-0.5 rounded bg-amber-500/15 text-amber-700 dark:text-amber-300 font-semibold">
+                  {comparisonDiff.summary.reassignedCount} reassigned
+                </span>
+              )}
+              {comparisonDiff.summary.totalChangedProjects === 0 && (
+                <span style={{ color: 'var(--text-secondary)' }}>No changes</span>
+              )}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setCompareSummaryModalOpen(true)}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-indigo-600 hover:bg-indigo-700 text-white font-semibold cursor-pointer"
+            >
+              <TableProperties className="w-3.5 h-3.5" aria-hidden="true" />
+              Delta Summary ({comparisonDiff.summary.totalChangedProjects})
+            </button>
+            <button
+              type="button"
+              onClick={() => setCheckpointsModalOpen(true)}
+              className="px-2.5 py-1 rounded-md border border-indigo-500/35 hover:bg-indigo-500/15 font-medium cursor-pointer"
+            >
+              Switch
+            </button>
+            <button
+              type="button"
+              onClick={clearBaselineCompare}
+              aria-label="Exit baseline comparison"
+              className="p-1 rounded-md hover:bg-indigo-500/20 cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" aria-hidden="true" />
             </button>
           </div>
         </div>

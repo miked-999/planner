@@ -1,4 +1,6 @@
 import { CascadePreviewModal } from './components/dialogs/CascadePreviewModal';
+import { CheckpointsModal } from './components/dialogs/CheckpointsModal';
+import { CompareSummaryModal } from './components/dialogs/CompareSummaryModal';
 import { EntityDrawer } from './components/dialogs/EntityDrawer';
 import { PortabilityModal } from './components/dialogs/PortabilityModal';
 import { SnapshotModal } from './components/dialogs/SnapshotModal';
@@ -31,6 +33,8 @@ function WorkspaceContent() {
       <TeamDrawerModal />
       <PortabilityModal />
       <SnapshotModal />
+      <CheckpointsModal />
+      <CompareSummaryModal />
     </AppShell>
   );
 }
