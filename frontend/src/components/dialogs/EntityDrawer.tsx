@@ -332,17 +332,18 @@ export function EntityDrawer() {
                   wd
                 </span>
                 <div className="flex items-center gap-1 ml-auto">
-                  {[
-                    [5, '1w'],
-                    [10, '2w'],
-                    [15, '3w'],
-                    [20, '4w'],
-                  ].map(([days, label]) => (
+                  {([
+                    [20, '1m'],
+                    [40, '2m'],
+                    [60, '3m'],
+                    [80, '4m'],
+                  ] as const).map(([days, label]) => (
                     <button
                       key={label}
                       type="button"
+                      title={`${days} working days`}
                       onClick={() =>
-                        updateProject(project.id, { estimated_days: Number(days) })
+                        updateProject(project.id, { estimated_days: days })
                       }
                       className={`px-1.5 py-0.5 rounded text-[10px] border cursor-pointer ${
                         (project.estimated_days ?? 10) === days

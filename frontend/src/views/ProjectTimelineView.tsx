@@ -738,14 +738,14 @@ export function ProjectTimelineView() {
         >
           {/* Sticky Top Header */}
           <div
-            className="sticky top-0 z-20 flex border-b"
+            className="sticky top-0 z-30 flex border-b"
             style={{
               backgroundColor: 'var(--bg-surface)',
               borderColor: 'var(--border-default)',
             }}
           >
             <div
-              className="sticky left-0 z-30 shrink-0 px-3 flex items-center justify-between border-r font-semibold text-xs"
+              className="sticky left-0 z-40 shrink-0 px-3 flex items-center justify-between border-r font-semibold text-xs shadow-[2px_0_6px_-2px_rgba(15,23,42,0.08)]"
               style={{
                 width: SIDEBAR_COL_WIDTH,
                 backgroundColor: 'var(--bg-surface)',
@@ -956,9 +956,8 @@ export function ProjectTimelineView() {
                   key={row.key}
                   style={{
                     height: activeRowHeight,
-                    borderColor: 'var(--border-default)',
                   }}
-                  className={`flex border-b group ${
+                  className={`flex group ${
                     isSelected ? 'bg-blue-500/8' : 'hover:bg-slate-500/4'
                   }`}
                 >
@@ -966,9 +965,12 @@ export function ProjectTimelineView() {
                     style={{
                       width: SIDEBAR_COL_WIDTH,
                       backgroundColor: 'var(--bg-surface)',
+                      backgroundImage: isSelected
+                        ? 'linear-gradient(rgba(59, 130, 246, 0.08), rgba(59, 130, 246, 0.08))'
+                        : undefined,
                       borderColor: 'var(--border-default)',
                     }}
-                    className="sticky left-0 z-15 shrink-0 px-2.5 border-r flex items-center justify-between gap-1.5 text-xs"
+                    className="sticky left-0 z-20 shrink-0 px-2.5 border-r border-b flex items-center justify-between gap-1.5 text-xs shadow-[2px_0_6px_-2px_rgba(15,23,42,0.08)]"
                   >
                     <div
                       className={`flex items-center gap-1.5 min-w-0 flex-1 ${
@@ -1098,8 +1100,14 @@ export function ProjectTimelineView() {
 
                   {/* Timeline Row Canvas (also accepts dropping a backlog card onto any week!) */}
                   <div
-                    className="relative"
-                    style={{ width: totalWidth, height: activeRowHeight }}
+                    className={`relative isolate border-b ${
+                      dragState?.rowKey === row.key ? 'z-10' : 'z-0'
+                    }`}
+                    style={{
+                      width: totalWidth,
+                      height: activeRowHeight,
+                      borderColor: 'var(--border-default)',
+                    }}
                   >
                     <div className="absolute inset-0 flex">
                       {weeks.map((w) => (

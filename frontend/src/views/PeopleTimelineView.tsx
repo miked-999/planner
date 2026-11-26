@@ -317,14 +317,14 @@ export function PeopleTimelineView() {
         <div style={{ width: SIDEBAR_COL_WIDTH + totalWidth, minHeight: '100%' }}>
           {/* Sticky Header */}
           <div
-            className="sticky top-0 z-20 flex border-b"
+            className="sticky top-0 z-30 flex border-b"
             style={{
               backgroundColor: 'var(--bg-surface)',
               borderColor: 'var(--border-default)',
             }}
           >
             <div
-              className="sticky left-0 z-30 shrink-0 px-3 flex items-center justify-between border-r font-semibold text-xs"
+              className="sticky left-0 z-40 shrink-0 px-3 flex items-center justify-between border-r font-semibold text-xs shadow-[2px_0_6px_-2px_rgba(15,23,42,0.08)]"
               style={{
                 width: SIDEBAR_COL_WIDTH,
                 backgroundColor: 'var(--bg-surface)',
@@ -398,17 +398,18 @@ export function PeopleTimelineView() {
               <div
                 style={{
                   height: tbdRow.rowHeight,
-                  borderColor: 'var(--border-default)',
                 }}
-                className="flex border-b bg-amber-500/5"
+                className="flex bg-amber-500/5"
               >
                 <div
                   style={{
                     width: SIDEBAR_COL_WIDTH,
                     backgroundColor: 'var(--bg-surface)',
+                    backgroundImage:
+                      'linear-gradient(rgba(245, 158, 11, 0.05), rgba(245, 158, 11, 0.05))',
                     borderColor: 'var(--border-default)',
                   }}
-                  className="sticky left-0 z-15 shrink-0 px-3 border-r flex items-center justify-between gap-2 text-xs"
+                  className="sticky left-0 z-20 shrink-0 px-3 border-r border-b flex items-center justify-between gap-2 text-xs shadow-[2px_0_6px_-2px_rgba(15,23,42,0.08)]"
                 >
                   <div className="min-w-0">
                     <div className="font-semibold text-amber-700 dark:text-amber-400 flex items-center gap-1.5">
@@ -425,8 +426,12 @@ export function PeopleTimelineView() {
                 </div>
 
                 <div
-                  className="relative"
-                  style={{ width: totalWidth, height: tbdRow.rowHeight }}
+                  className="relative isolate z-0 border-b"
+                  style={{
+                    width: totalWidth,
+                    height: tbdRow.rowHeight,
+                    borderColor: 'var(--border-default)',
+                  }}
                 >
                   <div className="absolute inset-0 flex pointer-events-none">
                     {weeks.map((w) => (
@@ -506,9 +511,8 @@ export function PeopleTimelineView() {
                   key={person.id}
                   style={{
                     height: rowHeight,
-                    borderColor: 'var(--border-default)',
                   }}
-                  className="flex border-b"
+                  className="flex"
                 >
                   <div
                     style={{
@@ -516,7 +520,7 @@ export function PeopleTimelineView() {
                       backgroundColor: 'var(--bg-surface)',
                       borderColor: 'var(--border-default)',
                     }}
-                    className="sticky left-0 z-15 shrink-0 px-3 border-r flex items-center justify-between gap-2 text-xs"
+                    className="sticky left-0 z-20 shrink-0 px-3 border-r border-b flex items-center justify-between gap-2 text-xs shadow-[2px_0_6px_-2px_rgba(15,23,42,0.08)]"
                   >
                     <div className="min-w-0">
                       <div className="font-semibold truncate">{person.name}</div>
@@ -540,7 +544,14 @@ export function PeopleTimelineView() {
                     </span>
                   </div>
 
-                  <div className="relative" style={{ width: totalWidth, height: rowHeight }}>
+                  <div
+                    className="relative isolate z-0 border-b"
+                    style={{
+                      width: totalWidth,
+                      height: rowHeight,
+                      borderColor: 'var(--border-default)',
+                    }}
+                  >
                     <div className="absolute inset-0 flex pointer-events-none">
                       {weeks.map((w) => (
                         <div
