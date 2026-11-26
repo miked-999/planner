@@ -12,6 +12,12 @@ import { addWorkingDays, generateWeeks, snapToWorkingDay, todayIsoLocal } from '
 import { canAddDependency, previewDependencyCascade } from '../engine/dependencies';
 import { comparePlans } from '../engine/diff';
 import {
+  nextProjectSortOrder,
+  reorderProjectsInPlan,
+  reorderTasksInPlan,
+  type DropPlacement,
+} from '../engine/ordering';
+import {
   computeScheduleMetrics,
   recalculateProjectRollups,
   scheduleProjectFromBacklog,
@@ -143,6 +149,13 @@ interface PlanContextValue {
   addTask: (projectId: string, name?: string) => Task | null;
   updateTask: (taskId: string, patch: Partial<Task>, checkCascade?: boolean) => void;
   deleteTask: (taskId: string) => void;
+  reorderProject: (dragId: string, targetId: string, placement: DropPlacement) => void;
+  reorderTask: (
+    dragTaskId: string,
+    targetTaskId: string | null,
+    placement: DropPlacement,
+  ) => void;
+  setProjectsArchived: (projectIds: string[], archived: boolean) => void;
 
   addPerson: (name: string) => Person | null;
   renamePerson: (personId: string, name: string) => void;
@@ -533,7 +546,8 @@ export function PlanProvider({ children }: { children: React.ReactNode }) {
           partial?.color ??
           PROJECT_PALETTE[plan.projects.length % PROJECT_PALETTE.length],
         notes: partial?.notes ?? '',
-        sort_order: plan.projects.length,
+        sort_order: nextProjectSortOrder(plan.projects),
+        archived: false,
       };
       commitPlan({
         ...plan,
@@ -570,7 +584,8 @@ export function PlanProvider({ children }: { children: React.ReactNode }) {
         ...src,
         id: newProjId,
         name: `${src.name} (Copy)`,
-        sort_order: plan.projects.length,
+        sort_order: nextProjectSortOrder(plan.projects),
+        archived: false,
       };
 
       const srcTasks = plan.tasks.filter((t) => t.project_id === projectId);
@@ -814,6 +829,39 @@ export function PlanProvider({ children }: { children: React.ReactNode }) {
     [plan, selectedEntity, commitPlan],
   );
 
+  const reorderProject = useCallback(
+    (dragId: string, targetId: string, placement: DropPlacement) => {
+      const next = reorderProjectsInPlan(plan, dragId, targetId, placement);
+      if (next !== plan) commitPlan(next);
+    },
+    [plan, commitPlan],
+  );
+
+  const reorderTask = useCallback(
+    (dragTaskId: string, targetTaskId: string | null, placement: DropPlacement) => {
+      const next = reorderTasksInPlan(plan, dragTaskId, targetTaskId, placement);
+      if (next !== plan) commitPlan(next);
+    },
+    [plan, commitPlan],
+  );
+
+  const setProjectsArchived = useCallback(
+    (projectIds: string[], archived: boolean) => {
+      const ids = new Set(projectIds);
+      if (ids.size === 0) return;
+      if (archived && selectedEntity && ids.has(selectedEntity.projectId)) {
+        setSelectedEntity(null);
+      }
+      commitPlan({
+        ...plan,
+        projects: plan.projects.map((p) =>
+          ids.has(p.id) && Boolean(p.archived) !== archived ? { ...p, archived } : p,
+        ),
+      });
+    },
+    [plan, selectedEntity, commitPlan],
+  );
+
   const addPerson = useCallback(
     (name: string): Person | null => {
       const trimmed = name.trim();
@@ -1048,6 +1096,9 @@ export function PlanProvider({ children }: { children: React.ReactNode }) {
       addTask,
       updateTask,
       deleteTask,
+      reorderProject,
+      reorderTask,
+      setProjectsArchived,
       addPerson,
       renamePerson,
       removePerson,
@@ -1105,6 +1156,9 @@ export function PlanProvider({ children }: { children: React.ReactNode }) {
       addTask,
       updateTask,
       deleteTask,
+      reorderProject,
+      reorderTask,
+      setProjectsArchived,
       addPerson,
       renamePerson,
       removePerson,

@@ -61,6 +61,7 @@ class Project(BaseModel):
     color: str = Field(default="#3b82f6", min_length=4, max_length=32)
     notes: str = ""
     sort_order: int = 0
+    archived: bool = False
 
     @model_validator(mode="after")
     def validate_dates(self) -> Project:

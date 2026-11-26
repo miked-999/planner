@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import {
+  Archive,
+  ArchiveRestore,
   ArrowLeft,
   CalendarPlus,
   Copy,
@@ -28,6 +30,7 @@ import {
   snapToWorkingDay,
 } from '../../engine/dates';
 import { computeScheduleMetrics } from '../../engine/rollup';
+import { byManualOrder } from '../../engine/ordering';
 import { usePlan } from '../../store/PlanContext';
 import type { EntityType, PriorityLevel, ProjectStatus } from '../../types/plan';
 import { HeadroomBadge, HealthDot } from '../ui/StatusBadges';
@@ -55,6 +58,7 @@ export function EntityDrawer() {
     moveProjectToBacklog,
     duplicateProject,
     deleteProject,
+    setProjectsArchived,
     addTask,
     updateTask,
     deleteTask,
@@ -217,6 +221,22 @@ export function EntityDrawer() {
 
       {/* Scrollable Inspector Body */}
       <div className="flex-1 overflow-y-auto p-4 space-y-5 text-xs">
+        {!isTaskMode && project.archived && (
+          <div className="p-2.5 rounded-lg border border-amber-500/40 bg-amber-500/10 flex items-center justify-between gap-2">
+            <span className="text-[11px] font-medium text-amber-800 dark:text-amber-300">
+              Archived — hidden from active timeline views.
+            </span>
+            <button
+              type="button"
+              onClick={() => setProjectsArchived([project.id], false)}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-semibold cursor-pointer shrink-0"
+            >
+              <ArchiveRestore className="w-3 h-3" aria-hidden="true" />
+              Restore
+            </button>
+          </div>
+        )}
+
         {/* Name & Colour */}
         <div className="space-y-2">
           <label className="block font-medium" style={{ color: 'var(--text-secondary)' }}>
@@ -664,7 +684,7 @@ export function EntityDrawer() {
                 className="rounded-lg border divide-y"
                 style={{ borderColor: 'var(--border-default)' }}
               >
-                {projectTasks.map((t) => (
+                {byManualOrder(projectTasks).map((t) => (
                   <div
                     key={t.id}
                     className="px-2.5 py-2 flex items-center justify-between gap-2 hover:bg-slate-500/5"
@@ -1286,22 +1306,47 @@ export function EntityDrawer() {
         >
           {!isTaskMode ? (
             <>
-              <button
-                type="button"
-                onClick={() => duplicateProject(project.id)}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border hover:bg-slate-500/10 cursor-pointer"
-                style={{ borderColor: 'var(--border-default)' }}
-              >
-                <Copy className="w-3.5 h-3.5" aria-hidden="true" />
-                Duplicate
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => duplicateProject(project.id)}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border hover:bg-slate-500/10 cursor-pointer"
+                  style={{ borderColor: 'var(--border-default)' }}
+                >
+                  <Copy className="w-3.5 h-3.5" aria-hidden="true" />
+                  Duplicate
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setProjectsArchived([project.id], !project.archived)}
+                  title={
+                    project.archived
+                      ? 'Restore project to active views'
+                      : 'Archive project (removes from timeline & table, keeps in history/exports)'
+                  }
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border hover:bg-slate-500/10 cursor-pointer"
+                  style={{ borderColor: 'var(--border-default)' }}
+                >
+                  {project.archived ? (
+                    <>
+                      <ArchiveRestore className="w-3.5 h-3.5" aria-hidden="true" />
+                      Restore
+                    </>
+                  ) : (
+                    <>
+                      <Archive className="w-3.5 h-3.5" aria-hidden="true" />
+                      Archive
+                    </>
+                  )}
+                </button>
+              </div>
               <button
                 type="button"
                 onClick={() => deleteProject(project.id)}
                 className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-red-500/12 hover:bg-red-500/20 text-red-600 dark:text-red-400 font-medium cursor-pointer"
               >
                 <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-                Delete Project
+                Delete
               </button>
             </>
           ) : (

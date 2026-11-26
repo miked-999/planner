@@ -41,6 +41,8 @@ export interface Project {
   color: string;
   notes: string;
   sort_order: number;
+  /** Archived projects are hidden from timeline/table views but kept in history & exports. */
+  archived?: boolean;
 }
 
 export interface Task {

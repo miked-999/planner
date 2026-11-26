@@ -86,6 +86,7 @@ export function PeopleTimelineView() {
     const allDates = [
       todayIso,
       ...plan.projects
+        .filter((p) => !p.archived)
         .flatMap((p) => [p.expected_start, p.expected_end])
         .filter((d): d is string => Boolean(d)),
       ...plan.unavailabilities.flatMap((u) => [u.start_date, u.end_date]),
@@ -129,7 +130,7 @@ export function PeopleTimelineView() {
       if (asg.person_id) continue;
       const proj = projectMap.get(asg.project_id);
       const task = asg.task_id ? taskMap.get(asg.task_id) : undefined;
-      if (!proj || proj.status === 'completed') continue;
+      if (!proj || proj.archived || proj.status === 'completed') continue;
       if (task && task.status === 'completed') continue;
       const win = resolveAssignmentWindow(asg, proj, task);
       if (!win) continue;
@@ -167,7 +168,7 @@ export function PeopleTimelineView() {
       for (const asg of personAssignments) {
         const proj = projectMap.get(asg.project_id);
         const task = asg.task_id ? taskMap.get(asg.task_id) : undefined;
-        if (!proj || proj.status === 'completed') continue;
+        if (!proj || proj.archived || proj.status === 'completed') continue;
         if (task && task.status === 'completed') continue;
         const win = resolveAssignmentWindow(asg, proj, task);
         if (!win) continue;

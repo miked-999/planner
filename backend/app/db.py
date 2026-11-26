@@ -67,7 +67,8 @@ CREATE TABLE IF NOT EXISTS projects (
     priority TEXT NOT NULL DEFAULT 'medium',
     color TEXT NOT NULL DEFAULT '#3b82f6',
     notes TEXT NOT NULL DEFAULT '',
-    sort_order INTEGER NOT NULL DEFAULT 0
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    archived INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS tasks (
@@ -194,6 +195,15 @@ def init_db(db_path: Path | None = None) -> None:
                     """
                 )
 
+            # v5 migration: archived flag on projects (completed projects hidden from timeline views)
+            p_col_names_v5 = {
+                r["name"] for r in conn.execute("PRAGMA table_info(projects)").fetchall()
+            }
+            if p_col_names_v5 and "archived" not in p_col_names_v5:
+                conn.execute(
+                    "ALTER TABLE projects ADD COLUMN archived INTEGER NOT NULL DEFAULT 0"
+                )
+
             # v3 migration: nullable expected_start/expected_end on tasks
             t_cols = conn.execute("PRAGMA table_info(tasks)").fetchall()
             t_start_col = next((r for r in t_cols if r["name"] == "expected_start"), None)
@@ -256,7 +266,7 @@ def init_db(db_path: Path | None = None) -> None:
                     """
                 )
             conn.execute(
-                "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '4')"
+                "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', '5')"
             )
             conn.execute(
                 "INSERT OR IGNORE INTO meta (key, value) VALUES ('plan_version', '1')"
@@ -281,6 +291,7 @@ def read_plan(db_path: Path | None = None) -> PlanDocument:
                 **{
                     **dict(row),
                     "auto_progress": bool(row["auto_progress"]),
+                    "archived": bool(row["archived"]),
                 }
             )
             for row in conn.execute(
@@ -353,8 +364,9 @@ def write_plan(plan: PlanDocument, db_path: Path | None = None) -> PlanDocument:
                 INSERT INTO projects (
                     id, name, description, expected_start, actual_start, expected_end,
                     estimated_days, original_expected_end, required_by, actual_end,
-                    percent_complete, auto_progress, status, priority, color, notes, sort_order
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    percent_complete, auto_progress, status, priority, color, notes, sort_order,
+                    archived
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -376,6 +388,7 @@ def write_plan(plan: PlanDocument, db_path: Path | None = None) -> PlanDocument:
                         p.color,
                         p.notes,
                         p.sort_order,
+                        1 if p.archived else 0,
                     )
                     for p in plan.projects
                 ],

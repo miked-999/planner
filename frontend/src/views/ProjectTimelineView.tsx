@@ -1,10 +1,17 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Archive,
+  ArrowDownUp,
   CalendarPlus,
+  CheckCircle2,
   ChevronDown,
   ChevronRight,
+  ChevronsDownUp,
+  ChevronsUpDown,
   Crosshair,
   Diamond,
+  Eye,
+  EyeOff,
   Filter,
   GitBranch,
   GripVertical,
@@ -27,13 +34,31 @@ import {
 } from '../engine/dates';
 import { findViolatedDependencyIds } from '../engine/dependencies';
 import {
+  byManualOrder,
+  PROJECT_SORT_LABELS,
+  sortProjects,
+  type DropPlacement,
+  type ProjectSortKey,
+} from '../engine/ordering';
+import {
   computeScheduleMetrics,
   updateProjectDates,
   updateTaskDates,
 } from '../engine/rollup';
 import { usePlan } from '../store/PlanContext';
+import { useLocalIdSet, useLocalPref } from '../store/useLocalPref';
 import type { EntityType, Project, ProjectStatus, Task } from '../types/plan';
 import { HealthDot, PriorityBadge, StatusPill } from '../components/ui/StatusBadges';
+import {
+  applyReorderDrop,
+  dropIndicatorShadow,
+  keyboardReorder,
+  REORDER_MIME,
+  ReorderHandle,
+  ReorderHandleSpacer,
+  resolveReorderDrop,
+  type ReorderItem,
+} from '../components/ui/ReorderHandle';
 
 type ZoomMode = 'compact' | 'standard' | 'detailed';
 
@@ -48,6 +73,7 @@ const ROW_HEIGHT_COMPARE = 48;
 const SIDEBAR_COL_WIDTH = 280;
 
 interface TimelineRow {
+  kind: 'item';
   key: string;
   entityType: EntityType;
   id: string;
@@ -62,10 +88,22 @@ interface TimelineRow {
   status: ProjectStatus;
   hasChildren: boolean;
   isExpanded: boolean;
+  /** Hidden by this user but currently revealed via the "N hidden" chip. */
+  isHidden: boolean;
+  section: 'main' | 'completed';
   assigneeNames: string[];
   tbdCount: number;
   raw: Project | Task;
 }
+
+/** Header row for the collapsible "Completed (N)" tray at the bottom of the grid. */
+interface SectionRow {
+  kind: 'section';
+  key: string;
+  count: number;
+}
+
+type GanttRow = TimelineRow | SectionRow;
 
 interface DragState {
   rowKey: string;
@@ -94,10 +132,26 @@ export function ProjectTimelineView() {
     addTask,
     addDependency,
     loadSamplePlan,
+    reorderProject,
+    reorderTask,
+    setProjectsArchived,
   } = usePlan();
 
   const [zoom, setZoom] = useState<ZoomMode>('standard');
-  const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(new Set());
+  // Per-user view preferences (persisted locally, never written to the shared plan)
+  const [sortBy, setSortBy] = useLocalPref<ProjectSortKey>('timeline.sortBy', 'manual');
+  const [expandedProjects, setExpandedProjects] = useLocalIdSet('timeline.expandedProjects');
+  const [hiddenProjects, setHiddenProjects] = useLocalIdSet('projects.hidden');
+  const [completedTrayOpen, setCompletedTrayOpen] = useLocalPref(
+    'timeline.completedTrayOpen',
+    false,
+  );
+  const [showHidden, setShowHidden] = useState(false);
+  const [reorderDrag, setReorderDrag] = useState<ReorderItem | null>(null);
+  const [dropTarget, setDropTarget] = useState<{
+    rowKey: string;
+    placement: DropPlacement;
+  } | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [personFilter, setPersonFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -123,9 +177,9 @@ export function ProjectTimelineView() {
   // Separate unscheduled backlog projects from scheduled Gantt rows
   const backlogProjects = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    return plan.projects.filter((p) => {
+    return byManualOrder(plan.projects).filter((p) => {
       const isUnscheduled = !p.expected_start || !p.expected_end;
-      if (!isUnscheduled) return false;
+      if (!isUnscheduled || p.archived) return false;
       if (q && !p.name.toLowerCase().includes(q)) return false;
       if (personFilter !== 'all') {
         const asgs = plan.assignments.filter((a) => a.project_id === p.id);
@@ -139,13 +193,58 @@ export function ProjectTimelineView() {
     });
   }, [plan.projects, plan.assignments, searchQuery, personFilter]);
 
-  const rows = useMemo<TimelineRow[]>(() => {
-    const q = searchQuery.trim().toLowerCase();
-    const out: TimelineRow[] = [];
+  const taskToProject = useMemo(
+    () => new Map(plan.tasks.map((t) => [t.id, t.project_id])),
+    [plan.tasks],
+  );
 
-    for (const proj of plan.projects) {
+  const hiddenCount = useMemo(
+    () => plan.projects.filter((p) => !p.archived && hiddenProjects.has(p.id)).length,
+    [plan.projects, hiddenProjects],
+  );
+
+  useEffect(() => {
+    if (hiddenCount === 0) setShowHidden(false);
+  }, [hiddenCount]);
+
+  // Auto-expand a collapsed project when one of its phases is selected (e.g. from the drawer)
+  useEffect(() => {
+    if (selectedEntity?.type !== 'task') return;
+    const pid = selectedEntity.projectId;
+    setExpandedProjects((prev) => (prev.has(pid) ? prev : new Set(prev).add(pid)));
+  }, [selectedEntity, setExpandedProjects]);
+
+  const { rows, completedProjectIds, expandableProjectIds } = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    const main: TimelineRow[] = [];
+    const completed: TimelineRow[] = [];
+    const completedIds: string[] = [];
+    const expandable: string[] = [];
+
+    const namesFor = (asgs: typeof plan.assignments): string[] =>
+      Array.from(
+        new Set(
+          asgs
+            .map((a) =>
+              a.person_id ? peopleById.get(a.person_id) : a.placeholder_label || 'TBD',
+            )
+            .filter((x): x is string => Boolean(x)),
+        ),
+      );
+
+    for (const proj of sortProjects(plan.projects, sortBy)) {
+      if (proj.archived) continue;
       if (!proj.expected_start || !proj.expected_end) continue;
       if (statusFilter !== 'all' && proj.status !== statusFilter) continue;
+
+      const isHidden = hiddenProjects.has(proj.id);
+      if (isHidden && !showHidden) continue;
+
+      // Completed projects live in their own collapsible tray at the bottom (unless the
+      // user explicitly filters to "Completed"). They're left out of Presentation Mode.
+      const section: TimelineRow['section'] =
+        proj.status === 'completed' && statusFilter === 'all' ? 'completed' : 'main';
+      if (section === 'completed' && isPresentationMode) continue;
 
       const projAssignments = plan.assignments.filter((a) => a.project_id === proj.id);
       if (personFilter === '__tbd__') {
@@ -157,7 +256,7 @@ export function ProjectTimelineView() {
         continue;
       }
 
-      const childTasks = plan.tasks.filter((t) => t.project_id === proj.id);
+      const childTasks = byManualOrder(plan.tasks.filter((t) => t.project_id === proj.id));
       const scheduledTasks = childTasks.filter(
         (t): t is Task & { expected_start: string; expected_end: string } =>
           Boolean(t.expected_start && t.expected_end),
@@ -168,21 +267,17 @@ export function ProjectTimelineView() {
         childTasks.some((t) => t.name.toLowerCase().includes(q));
       if (!matchesSearch) continue;
 
-      const projPeople = Array.from(
-        new Set(
-          projAssignments
-            .map((a) =>
-              a.person_id
-                ? peopleById.get(a.person_id)
-                : a.placeholder_label || 'TBD',
-            )
-            .filter((x): x is string => Boolean(x)),
-        ),
-      );
-      const projTbdCount = projAssignments.filter((a) => !a.person_id).length;
+      if (section === 'completed') {
+        completedIds.push(proj.id);
+        if (!completedTrayOpen) continue;
+      }
 
-      const isExpanded = !collapsedProjects.has(proj.id);
-      out.push({
+      const target = section === 'completed' ? completed : main;
+      const isExpanded = expandedProjects.has(proj.id);
+      if (scheduledTasks.length > 0) expandable.push(proj.id);
+
+      target.push({
+        kind: 'item',
         key: `project:${proj.id}`,
         entityType: 'project',
         id: proj.id,
@@ -197,26 +292,18 @@ export function ProjectTimelineView() {
         status: proj.status,
         hasChildren: scheduledTasks.length > 0,
         isExpanded,
-        assigneeNames: projPeople,
-        tbdCount: projTbdCount,
+        isHidden,
+        section,
+        assigneeNames: namesFor(projAssignments),
+        tbdCount: projAssignments.filter((a) => !a.person_id).length,
         raw: proj,
       });
 
       if (isExpanded) {
         for (const task of scheduledTasks) {
           const taskAsgs = plan.assignments.filter((a) => a.task_id === task.id);
-          const taskPeople = Array.from(
-            new Set(
-              taskAsgs
-                .map((a) =>
-                  a.person_id
-                    ? peopleById.get(a.person_id)
-                    : a.placeholder_label || 'TBD',
-                )
-                .filter((x): x is string => Boolean(x)),
-            ),
-          );
-          out.push({
+          target.push({
+            kind: 'item',
             key: `task:${task.id}`,
             entityType: 'task',
             id: task.id,
@@ -231,24 +318,95 @@ export function ProjectTimelineView() {
             status: task.status,
             hasChildren: false,
             isExpanded: false,
-            assigneeNames: taskPeople,
+            isHidden,
+            section,
+            assigneeNames: namesFor(taskAsgs),
             tbdCount: taskAsgs.filter((a) => !a.person_id).length,
             raw: task,
           });
         }
       }
     }
-    return out;
+
+    const out: GanttRow[] = [...main];
+    if (completedIds.length > 0) {
+      out.push({ kind: 'section', key: 'section:completed', count: completedIds.length });
+      out.push(...completed);
+    }
+    return {
+      rows: out,
+      completedProjectIds: completedIds,
+      expandableProjectIds: expandable,
+    };
   }, [
     plan.projects,
     plan.tasks,
     plan.assignments,
     peopleById,
-    collapsedProjects,
+    sortBy,
+    expandedProjects,
+    hiddenProjects,
+    showHidden,
+    completedTrayOpen,
+    isPresentationMode,
     statusFilter,
     personFilter,
     searchQuery,
   ]);
+
+  const itemRows = useMemo(
+    () => rows.filter((r): r is TimelineRow => r.kind === 'item'),
+    [rows],
+  );
+  const visibleReorderItems = useMemo<ReorderItem[]>(
+    () => itemRows.map((r) => ({ type: r.entityType, id: r.id, projectId: r.projectId })),
+    [itemRows],
+  );
+  const allExpanded =
+    expandableProjectIds.length > 0 &&
+    expandableProjectIds.every((id) => expandedProjects.has(id));
+
+  const toggleExpandAll = () => {
+    setExpandedProjects((prev) => {
+      const next = new Set(prev);
+      for (const id of expandableProjectIds) {
+        if (allExpanded) next.delete(id);
+        else next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const toggleProjectExpanded = (projectId: string) => {
+    setExpandedProjects((prev) => {
+      const next = new Set(prev);
+      if (next.has(projectId)) next.delete(projectId);
+      else next.add(projectId);
+      return next;
+    });
+  };
+
+  const toggleProjectHidden = (projectId: string) => {
+    setHiddenProjects((prev) => {
+      const next = new Set(prev);
+      if (next.has(projectId)) next.delete(projectId);
+      else next.add(projectId);
+      return next;
+    });
+  };
+
+  const archiveAllCompleted = () => {
+    if (completedProjectIds.length === 0) return;
+    const ok = window.confirm(
+      `Archive ${completedProjectIds.length} completed project(s)?\n\nThey'll be removed from the timeline and moved to the Archived list (Table view → status filter → Archived). You can restore them anytime, and they stay in checkpoints and exports.`,
+    );
+    if (ok) setProjectsArchived(completedProjectIds, true);
+  };
+
+  const handleReorderDragState = (item: ReorderItem | null) => {
+    setReorderDrag(item);
+    if (!item) setDropTarget(null);
+  };
 
   const { timelineStart, weeks, totalWidth } = useMemo(() => {
     const ghostDates = comparisonDiff
@@ -258,6 +416,7 @@ export function ProjectTimelineView() {
       todayIso,
       ...ghostDates,
       ...plan.projects
+        .filter((p) => !p.archived)
         .flatMap((p) => [p.expected_start, p.expected_end, p.required_by])
         .filter((d): d is string => Boolean(d)),
     ].sort();
@@ -390,9 +549,19 @@ export function ProjectTimelineView() {
 
   const rowIndexMap = useMemo(() => {
     const m = new Map<string, { idx: number; row: TimelineRow }>();
-    rows.forEach((r, idx) => m.set(r.key, { idx, row: r }));
+    rows.forEach((r, idx) => {
+      if (r.kind === 'item') m.set(r.key, { idx, row: r });
+    });
     return m;
   }, [rows]);
+
+  /** Dependency endpoints on a collapsed phase attach to the parent project's roll-up bar. */
+  const resolveDepEndpoint = (type: EntityType, id: string) => {
+    const direct = rowIndexMap.get(`${type}:${id}`);
+    if (direct || type !== 'task') return direct;
+    const pid = taskToProject.get(id);
+    return pid ? rowIndexMap.get(`project:${pid}`) : undefined;
+  };
 
   if (plan.projects.length === 0) {
     return (
@@ -439,7 +608,7 @@ export function ProjectTimelineView() {
 
   const todayX = dateToX(todayIso) + dayPx * 0.5;
   const totalUnscheduledCount = plan.projects.filter(
-    (p) => !p.expected_start || !p.expected_end,
+    (p) => !p.archived && (!p.expected_start || !p.expected_end),
   ).length;
 
   return (
@@ -492,8 +661,63 @@ export function ProjectTimelineView() {
             </button>
           </div>
 
+          {expandableProjectIds.length > 0 && (
+            <button
+              type="button"
+              onClick={toggleExpandAll}
+              title={
+                allExpanded
+                  ? 'Collapse all project phases'
+                  : 'Expand all project phases'
+              }
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border font-medium hover:bg-slate-500/10 cursor-pointer"
+              style={{ borderColor: 'var(--border-default)' }}
+            >
+              {allExpanded ? (
+                <ChevronsDownUp className="w-3.5 h-3.5" aria-hidden="true" />
+              ) : (
+                <ChevronsUpDown className="w-3.5 h-3.5" aria-hidden="true" />
+              )}
+              <span>{allExpanded ? 'Collapse all' : 'Expand all'}</span>
+            </button>
+          )}
+
           {!isPresentationMode && (
             <>
+              <div
+                className={`inline-flex items-center gap-1 px-2 py-1 rounded-md border ${
+                  sortBy !== 'manual'
+                    ? 'border-blue-500/50 bg-blue-500/10 text-blue-700 dark:text-blue-300 font-medium'
+                    : ''
+                }`}
+                style={
+                  sortBy !== 'manual'
+                    ? undefined
+                    : {
+                        borderColor: 'var(--border-default)',
+                        backgroundColor: 'var(--bg-subtle)',
+                      }
+                }
+              >
+                <ArrowDownUp
+                  className="w-3.5 h-3.5 shrink-0"
+                  style={sortBy !== 'manual' ? undefined : { color: 'var(--text-muted)' }}
+                  aria-hidden="true"
+                />
+                <select
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value as ProjectSortKey)}
+                  aria-label="Sort projects by"
+                  className="bg-transparent pr-1 cursor-pointer focus:outline-none"
+                >
+                  {(Object.keys(PROJECT_SORT_LABELS) as ProjectSortKey[]).map((k) => (
+                    <option key={k} value={k}>
+                      Sort: {PROJECT_SORT_LABELS[k]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               <button
                 type="button"
                 onClick={() => setBacklogTrayOpen((o) => !o)}
@@ -511,6 +735,46 @@ export function ProjectTimelineView() {
                 <Inbox className="w-3.5 h-3.5 text-purple-500" aria-hidden="true" />
                 <span>Backlog ({totalUnscheduledCount})</span>
               </button>
+
+              {hiddenCount > 0 && (
+                <div className="inline-flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setShowHidden((s) => !s)}
+                    title={
+                      showHidden
+                        ? 'Re-hide hidden projects'
+                        : 'Temporarily reveal projects hidden in your view'
+                    }
+                    className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border font-medium cursor-pointer transition-colors ${
+                      showHidden
+                        ? 'border-amber-500/60 bg-amber-500/15 text-amber-800 dark:text-amber-300'
+                        : 'border-slate-400/50 bg-slate-500/10 hover:bg-slate-500/18'
+                    }`}
+                  >
+                    {showHidden ? (
+                      <Eye className="w-3.5 h-3.5" aria-hidden="true" />
+                    ) : (
+                      <EyeOff className="w-3.5 h-3.5" aria-hidden="true" />
+                    )}
+                    <span>
+                      {showHidden ? `Showing ${hiddenCount} hidden` : `${hiddenCount} hidden`}
+                    </span>
+                  </button>
+                  {showHidden && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setHiddenProjects(() => new Set());
+                        setShowHidden(false);
+                      }}
+                      className="px-2 py-1 rounded text-[11px] text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
+                    >
+                      Unhide all
+                    </button>
+                  )}
+                </div>
+              )}
 
               <div className="flex items-center gap-1.5 ml-1">
                 <Filter
@@ -872,9 +1136,9 @@ export function ProjectTimelineView() {
                 </marker>
               </defs>
               {plan.dependencies.map((dep) => {
-                const fromEntry = rowIndexMap.get(`${dep.from_type}:${dep.from_id}`);
-                const toEntry = rowIndexMap.get(`${dep.to_type}:${dep.to_id}`);
-                if (!fromEntry || !toEntry) return null;
+                const fromEntry = resolveDepEndpoint(dep.from_type, dep.from_id);
+                const toEntry = resolveDepEndpoint(dep.to_type, dep.to_id);
+                if (!fromEntry || !toEntry || fromEntry.row.key === toEntry.row.key) return null;
 
                 const fromDates = previewRowDates(fromEntry.row);
                 const toDates = previewRowDates(toEntry.row);
@@ -906,7 +1170,80 @@ export function ProjectTimelineView() {
               })}
             </svg>
 
-            {rows.map((row) => {
+            {rows.map((ganttRow) => {
+              if (ganttRow.kind === 'section') {
+                return (
+                  <div
+                    key={ganttRow.key}
+                    style={{ height: activeRowHeight }}
+                    className="flex"
+                  >
+                    <div
+                      style={{
+                        width: SIDEBAR_COL_WIDTH,
+                        backgroundColor: 'var(--bg-surface)',
+                        backgroundImage:
+                          'linear-gradient(rgba(100, 116, 139, 0.08), rgba(100, 116, 139, 0.08))',
+                        borderColor: 'var(--border-default)',
+                      }}
+                      className="sticky left-0 z-20 shrink-0 px-2.5 border-r border-b flex items-center justify-between gap-2 text-xs shadow-[2px_0_6px_-2px_rgba(15,23,42,0.08)]"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setCompletedTrayOpen((o) => !o)}
+                        className="inline-flex items-center gap-1.5 font-semibold cursor-pointer hover:underline min-w-0"
+                        style={{ color: 'var(--text-secondary)' }}
+                      >
+                        {completedTrayOpen ? (
+                          <ChevronDown className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                        ) : (
+                          <ChevronRight className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                        )}
+                        <CheckCircle2
+                          className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0"
+                          aria-hidden="true"
+                        />
+                        <span className="truncate">Completed ({ganttRow.count})</span>
+                      </button>
+
+                      {!isPresentationMode && (
+                        <button
+                          type="button"
+                          onClick={archiveAllCompleted}
+                          title="Archive all completed projects so they leave the timeline"
+                          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-medium hover:bg-slate-500/12 cursor-pointer shrink-0"
+                          style={{
+                            borderColor: 'var(--border-default)',
+                            color: 'var(--text-secondary)',
+                          }}
+                        >
+                          <Archive className="w-3 h-3" aria-hidden="true" />
+                          <span>Archive all</span>
+                        </button>
+                      )}
+                    </div>
+
+                    <div
+                      className="relative isolate z-0 border-b flex items-center px-3 text-[11px]"
+                      style={{
+                        width: totalWidth,
+                        height: activeRowHeight,
+                        borderColor: 'var(--border-default)',
+                        backgroundColor: 'rgba(100, 116, 139, 0.05)',
+                        color: 'var(--text-muted)',
+                      }}
+                    >
+                      {!completedTrayOpen && (
+                        <span>
+                          {ganttRow.count} completed project{ganttRow.count === 1 ? '' : 's'} collapsed — click &ldquo;Completed ({ganttRow.count})&rdquo; on the left to expand
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              }
+
+              const row = ganttRow;
               const dates = previewRowDates(row);
               const metrics = computeScheduleMetrics({
                 ...(row.raw as Project),
@@ -951,15 +1288,87 @@ export function ProjectTimelineView() {
                   )
                 : 0;
 
+              const canReorder = !isPresentationMode && sortBy === 'manual';
+              const rowReorderItem: ReorderItem = {
+                type: row.entityType,
+                id: row.id,
+                projectId: row.projectId,
+              };
+              const activeDropPlacement =
+                dropTarget?.rowKey === row.key ? dropTarget.placement : null;
+              const indicatorShadow = dropIndicatorShadow(activeDropPlacement);
+
               return (
                 <div
                   key={row.key}
+                  data-reorder-row
+                  onDragOver={(e) => {
+                    if (
+                      !canReorder ||
+                      !reorderDrag ||
+                      !e.dataTransfer.types.includes(REORDER_MIME)
+                    ) {
+                      return;
+                    }
+                    const placement = resolveReorderDrop(
+                      reorderDrag,
+                      rowReorderItem,
+                      e.clientY,
+                      e.currentTarget.getBoundingClientRect(),
+                    );
+                    if (placement) {
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = 'move';
+                      if (
+                        dropTarget?.rowKey !== row.key ||
+                        dropTarget.placement !== placement
+                      ) {
+                        setDropTarget({ rowKey: row.key, placement });
+                      }
+                    }
+                  }}
+                  onDragLeave={(e) => {
+                    if (
+                      dropTarget?.rowKey === row.key &&
+                      !e.currentTarget.contains(e.relatedTarget as Node | null)
+                    ) {
+                      setDropTarget(null);
+                    }
+                  }}
+                  onDrop={(e) => {
+                    if (!canReorder || !e.dataTransfer.types.includes(REORDER_MIME)) {
+                      return;
+                    }
+                    const raw = e.dataTransfer.getData(REORDER_MIME);
+                    if (!raw) return;
+                    try {
+                      const dragged = JSON.parse(raw) as ReorderItem;
+                      const placement = resolveReorderDrop(
+                        dragged,
+                        rowReorderItem,
+                        e.clientY,
+                        e.currentTarget.getBoundingClientRect(),
+                      );
+                      if (placement) {
+                        e.preventDefault();
+                        applyReorderDrop(dragged, rowReorderItem, placement, {
+                          reorderProject,
+                          reorderTask,
+                        });
+                      }
+                    } catch {
+                      // ignore malformed drag payload
+                    } finally {
+                      setReorderDrag(null);
+                      setDropTarget(null);
+                    }
+                  }}
                   style={{
                     height: activeRowHeight,
                   }}
                   className={`flex group ${
                     isSelected ? 'bg-blue-500/8' : 'hover:bg-slate-500/4'
-                  }`}
+                  } ${row.isHidden ? 'opacity-65' : ''}`}
                 >
                   <div
                     style={{
@@ -967,27 +1376,47 @@ export function ProjectTimelineView() {
                       backgroundColor: 'var(--bg-surface)',
                       backgroundImage: isSelected
                         ? 'linear-gradient(rgba(59, 130, 246, 0.08), rgba(59, 130, 246, 0.08))'
-                        : undefined,
+                        : row.section === 'completed'
+                          ? 'linear-gradient(rgba(100, 116, 139, 0.03), rgba(100, 116, 139, 0.03))'
+                          : undefined,
                       borderColor: 'var(--border-default)',
+                      boxShadow: indicatorShadow
+                        ? `${indicatorShadow}, 2px 0 6px -2px rgba(15,23,42,0.08)`
+                        : undefined,
                     }}
                     className="sticky left-0 z-20 shrink-0 px-2.5 border-r border-b flex items-center justify-between gap-1.5 text-xs shadow-[2px_0_6px_-2px_rgba(15,23,42,0.08)]"
                   >
                     <div
                       className={`flex items-center gap-1.5 min-w-0 flex-1 ${
-                        row.entityType === 'task' ? 'pl-5' : ''
+                        row.entityType === 'task' ? 'pl-4' : ''
                       }`}
                     >
+                      {!isPresentationMode &&
+                        (canReorder ? (
+                          <ReorderHandle
+                            item={rowReorderItem}
+                            label={row.name}
+                            onDragStateChange={handleReorderDragState}
+                            onKeyboardMove={(delta) =>
+                              keyboardReorder(visibleReorderItems, rowReorderItem, delta, {
+                                reorderProject,
+                                reorderTask,
+                              })
+                            }
+                          />
+                        ) : (
+                          <span
+                            title={`Sorted by ${PROJECT_SORT_LABELS[sortBy]} — switch Sort to "Manual order" to drag-reorder`}
+                            className="p-0.5 -ml-1 opacity-20 shrink-0 cursor-not-allowed"
+                          >
+                            <GripVertical className="w-3.5 h-3.5" aria-hidden="true" />
+                          </span>
+                        ))}
+
                       {row.entityType === 'project' && row.hasChildren ? (
                         <button
                           type="button"
-                          onClick={() =>
-                            setCollapsedProjects((prev) => {
-                              const next = new Set(prev);
-                              if (next.has(row.id)) next.delete(row.id);
-                              else next.add(row.id);
-                              return next;
-                            })
-                          }
+                          onClick={() => toggleProjectExpanded(row.id)}
                           aria-label={
                             row.isExpanded ? `Collapse ${row.name}` : `Expand ${row.name}`
                           }
@@ -1001,7 +1430,9 @@ export function ProjectTimelineView() {
                         </button>
                       ) : row.entityType === 'project' ? (
                         <span className="w-4 shrink-0" />
-                      ) : null}
+                      ) : (
+                        <ReorderHandleSpacer />
+                      )}
 
                       <HealthDot health={metrics.health} />
 
@@ -1039,11 +1470,54 @@ export function ProjectTimelineView() {
                     </div>
 
                     {!isPresentationMode && (
-                      <div className="flex items-center gap-1 opacity-75 group-hover:opacity-100 shrink-0">
+                      <div className="flex items-center gap-0.5 opacity-75 group-hover:opacity-100 shrink-0">
                         {row.entityType === 'project' && (
                           <button
                             type="button"
-                            onClick={() => addTask(row.id)}
+                            onClick={() => toggleProjectHidden(row.id)}
+                            title={
+                              row.isHidden
+                                ? `Unhide ${row.name}`
+                                : `Hide ${row.name} from your view`
+                            }
+                            aria-label={
+                              row.isHidden ? `Unhide ${row.name}` : `Hide ${row.name}`
+                            }
+                            className={`p-1 rounded cursor-pointer ${
+                              row.isHidden
+                                ? 'text-amber-600 dark:text-amber-400 bg-amber-500/15 opacity-100'
+                                : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:bg-slate-500/15'
+                            }`}
+                            style={row.isHidden ? undefined : { color: 'var(--text-muted)' }}
+                          >
+                            {row.isHidden ? (
+                              <Eye className="w-3 h-3" aria-hidden="true" />
+                            ) : (
+                              <EyeOff className="w-3 h-3" aria-hidden="true" />
+                            )}
+                          </button>
+                        )}
+                        {row.entityType === 'project' && row.status === 'completed' && (
+                          <button
+                            type="button"
+                            onClick={() => setProjectsArchived([row.id], true)}
+                            title={`Archive ${row.name}`}
+                            aria-label={`Archive ${row.name}`}
+                            className="p-1 rounded hover:bg-slate-500/15 cursor-pointer"
+                            style={{ color: 'var(--text-muted)' }}
+                          >
+                            <Archive className="w-3 h-3" aria-hidden="true" />
+                          </button>
+                        )}
+                        {row.entityType === 'project' && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const created = addTask(row.id);
+                              if (created) {
+                                setExpandedProjects((prev) => new Set(prev).add(row.id));
+                              }
+                            }}
                             title="Add phase/task"
                             aria-label={`Add phase to ${row.name}`}
                             className="p-1 rounded hover:bg-slate-500/15 cursor-pointer"
@@ -1107,6 +1581,7 @@ export function ProjectTimelineView() {
                       width: totalWidth,
                       height: activeRowHeight,
                       borderColor: 'var(--border-default)',
+                      boxShadow: indicatorShadow,
                     }}
                   >
                     <div className="absolute inset-0 flex">

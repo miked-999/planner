@@ -45,21 +45,22 @@ export function DashboardView() {
   const horizon4WeeksIso = useMemo(() => addCalendarDays(todayIso, 28), [todayIso]);
 
   const stats = useMemo(() => {
-    const activeProjects = plan.projects.filter((p) => p.status === 'in_progress');
-    const upcomingProjects = plan.projects.filter(
+    const visibleProjects = plan.projects.filter((p) => !p.archived);
+    const activeProjects = visibleProjects.filter((p) => p.status === 'in_progress');
+    const upcomingProjects = visibleProjects.filter(
       (p) => p.status === 'planned' && Boolean(p.expected_start),
     );
-    const backlogProjects = plan.projects.filter(
+    const backlogProjects = visibleProjects.filter(
       (p) => !p.expected_start || !p.expected_end || p.status === 'backlog',
     );
-    const completingIn4Weeks = plan.projects.filter(
+    const completingIn4Weeks = visibleProjects.filter(
       (p) =>
         p.status !== 'completed' &&
         Boolean(p.expected_end) &&
         p.expected_end! >= todayIso &&
         p.expected_end! <= horizon4WeeksIso,
     );
-    const lateProjects = plan.projects.filter(
+    const lateProjects = visibleProjects.filter(
       (p) => computeScheduleMetrics(p).isForecastLate,
     );
 
@@ -106,7 +107,7 @@ export function DashboardView() {
       ({ avail }) => avail.availableDate <= horizon4WeeksIso,
     );
 
-    const upcomingDeliveries = plan.projects
+    const upcomingDeliveries = visibleProjects
       .filter(
         (p): p is typeof p & { expected_end: string } =>
           p.status !== 'completed' && Boolean(p.expected_end),
@@ -115,7 +116,7 @@ export function DashboardView() {
       .slice(0, 6);
 
     const violatedDepIds = findViolatedDependencyIds(plan);
-    const projMap = new Map(plan.projects.map((p) => [p.id, p]));
+    const projMap = new Map(visibleProjects.map((p) => [p.id, p]));
     const openTbdSlots = plan.assignments
       .filter((a) => !a.person_id)
       .map((a) => ({

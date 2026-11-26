@@ -343,3 +343,79 @@ def test_checkpoints_manual_auto_weekly_and_restore(client: TestClient) -> None:
 
 
 
+
+
+def test_project_manual_order_and_archive_roundtrip(client: TestClient) -> None:
+    seed = client.post("/api/plan/seed").json()
+    assert all(p["archived"] is False for p in seed["projects"])
+
+    # Reverse the shared manual order and archive one project
+    ordered_ids = [p["id"] for p in seed["projects"]][::-1]
+    for p in seed["projects"]:
+        p["sort_order"] = ordered_ids.index(p["id"])
+        if p["id"] == ordered_ids[0]:
+            p["archived"] = True
+
+    saved = client.put("/api/plan", json=seed)
+    assert saved.status_code == 200
+    reloaded = client.get("/api/plan").json()
+    assert [p["id"] for p in reloaded["projects"]] == ordered_ids
+    archived = [p for p in reloaded["projects"] if p["archived"]]
+    assert [p["id"] for p in archived] == [ordered_ids[0]]
+
+    # JSON export/import keeps the order and archived flag
+    exported = client.get("/api/export/json").json()
+    assert client.post("/api/import/json", json=exported).status_code == 200
+    again = client.get("/api/plan").json()
+    assert [p["id"] for p in again["projects"]] == ordered_ids
+    assert [p["id"] for p in again["projects"] if p["archived"]] == [ordered_ids[0]]
+
+    # Legacy JSON without the archived field still imports (defaults to False)
+    legacy = client.get("/api/export/json").json()
+    for p in legacy["plan"]["projects"]:
+        p.pop("archived", None)
+    assert client.post("/api/import/json", json=legacy).status_code == 200
+    legacy_loaded = client.get("/api/plan").json()
+    assert all(p["archived"] is False for p in legacy_loaded["projects"])
+
+
+def test_v4_database_migrates_archived_column(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_file = tmp_path / "legacy_v4.db"
+    conn = sqlite3.connect(db_file)
+    conn.executescript(
+        """
+        CREATE TABLE projects (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            expected_start TEXT,
+            actual_start TEXT,
+            expected_end TEXT,
+            estimated_days INTEGER DEFAULT 10,
+            original_expected_end TEXT,
+            required_by TEXT,
+            actual_end TEXT,
+            percent_complete INTEGER NOT NULL DEFAULT 0,
+            auto_progress INTEGER NOT NULL DEFAULT 1,
+            status TEXT NOT NULL DEFAULT 'planned',
+            priority TEXT NOT NULL DEFAULT 'medium',
+            color TEXT NOT NULL DEFAULT '#3b82f6',
+            notes TEXT NOT NULL DEFAULT '',
+            sort_order INTEGER NOT NULL DEFAULT 0
+        );
+        INSERT INTO projects (id, name, expected_start, expected_end, status, sort_order)
+        VALUES ('p-2', 'Second', '2026-01-05', '2026-01-09', 'completed', 1),
+               ('p-1', 'First', '2026-01-05', '2026-01-09', 'planned', 0);
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setenv("PLANNER_DB_PATH", str(db_file))
+    monkeypatch.setenv("PLANNER_BACKUP_DIR", str(tmp_path / "backups"))
+    with TestClient(app) as c:
+        plan = c.get("/api/plan").json()
+    assert [p["id"] for p in plan["projects"]] == ["p-1", "p-2"]
+    assert all(p["archived"] is False for p in plan["projects"])

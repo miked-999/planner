@@ -153,6 +153,8 @@ def _build_csv_files(plan: PlanDocument) -> dict[str, str]:
             "color",
             "description",
             "notes",
+            "sort_order",
+            "archived",
         ],
         [
             [
@@ -173,6 +175,8 @@ def _build_csv_files(plan: PlanDocument) -> dict[str, str]:
                 p.color,
                 p.description,
                 p.notes,
+                p.sort_order,
+                p.archived,
             ]
             for p in plan.projects
         ],

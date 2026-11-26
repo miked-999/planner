@@ -1,10 +1,18 @@
-import React, { useId, useMemo, useState } from 'react';
+import React, { useEffect, useId, useMemo, useState } from 'react';
 import {
+  Archive,
+  ArchiveRestore,
   ArrowDown,
+  ArrowDownUp,
   ArrowUp,
   ChevronDown,
   ChevronRight,
+  ChevronsDownUp,
+  ChevronsUpDown,
+  Eye,
+  EyeOff,
   Filter,
+  GripVertical,
   Plus,
 } from 'lucide-react';
 import {
@@ -12,9 +20,21 @@ import {
   formatShortDate,
   formatSignedWorkingDays,
 } from '../engine/dates';
+import { byManualOrder, type DropPlacement } from '../engine/ordering';
 import { computeScheduleMetrics } from '../engine/rollup';
 import { usePlan } from '../store/PlanContext';
+import { useLocalIdSet } from '../store/useLocalPref';
 import type { PriorityLevel, ProjectStatus } from '../types/plan';
+import {
+  applyReorderDrop,
+  dropIndicatorShadow,
+  keyboardReorder,
+  REORDER_MIME,
+  ReorderHandle,
+  ReorderHandleSpacer,
+  resolveReorderDrop,
+  type ReorderItem,
+} from '../components/ui/ReorderHandle';
 import {
   HeadroomBadge,
   HealthDot,
@@ -23,6 +43,7 @@ import {
 } from '../components/ui/StatusBadges';
 
 type SortColumn =
+  | 'manual'
   | 'name'
   | 'status'
   | 'priority'
@@ -44,25 +65,55 @@ export function ProjectTableView() {
     updateProject,
     updateTask,
     addTask,
+    reorderProject,
+    reorderTask,
+    setProjectsArchived,
   } = usePlan();
 
   const captionId = useId();
-  const [sortCol, setSortCol] = useState<SortColumn>('expected_start');
+  const [sortCol, setSortCol] = useState<SortColumn>('manual');
   const [sortDir, setSortDir] = useState<'ascending' | 'descending'>('ascending');
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [expanded, setExpanded] = useLocalIdSet('table.expandedProjects');
+  const [hiddenProjects, setHiddenProjects] = useLocalIdSet('projects.hidden');
+  const [showHidden, setShowHidden] = useState(false);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [sortAnnouncement, setSortAnnouncement] = useState('');
+  const [reorderDrag, setReorderDrag] = useState<ReorderItem | null>(null);
+  const [dropTarget, setDropTarget] = useState<{
+    rowKey: string;
+    placement: DropPlacement;
+  } | null>(null);
 
   const peopleById = useMemo(
     () => new Map(plan.people.map((p) => [p.id, p.name])),
     [plan.people],
   );
 
+  const archivedCount = useMemo(
+    () => plan.projects.filter((p) => Boolean(p.archived)).length,
+    [plan.projects],
+  );
+
+  const hiddenCount = useMemo(
+    () => plan.projects.filter((p) => !p.archived && hiddenProjects.has(p.id)).length,
+    [plan.projects, hiddenProjects],
+  );
+
+  useEffect(() => {
+    if (hiddenCount === 0) setShowHidden(false);
+  }, [hiddenCount]);
+
   const sortedProjects = useMemo(() => {
     const q = search.trim().toLowerCase();
     const filtered = plan.projects.filter((p) => {
-      if (statusFilter !== 'all' && p.status !== statusFilter) return false;
+      if (statusFilter === 'archived') {
+        if (!p.archived) return false;
+      } else {
+        if (p.archived) return false;
+        if (hiddenProjects.has(p.id) && !showHidden) return false;
+        if (statusFilter !== 'all' && p.status !== statusFilter) return false;
+      }
       if (!q) return true;
       const tasksMatch = plan.tasks.some(
         (t) => t.project_id === p.id && t.name.toLowerCase().includes(q),
@@ -70,8 +121,12 @@ export function ProjectTableView() {
       return p.name.toLowerCase().includes(q) || tasksMatch;
     });
 
+    const manual = byManualOrder(filtered);
+    if (sortCol === 'manual') return manual;
+    const manualIdx = new Map(manual.map((p, i) => [p.id, i]));
+
     const factor = sortDir === 'ascending' ? 1 : -1;
-    return [...filtered].sort((a, b) => {
+    return [...manual].sort((a, b) => {
       const ma = computeScheduleMetrics(a);
       const mb = computeScheduleMetrics(b);
       let cmp = 0;
@@ -107,9 +162,70 @@ export function ProjectTableView() {
           cmp = a.percent_complete - b.percent_complete;
           break;
       }
-      return factor * cmp;
+      return factor * cmp || manualIdx.get(a.id)! - manualIdx.get(b.id)!;
     });
-  }, [plan.projects, plan.tasks, search, statusFilter, sortCol, sortDir]);
+  }, [
+    plan.projects,
+    plan.tasks,
+    search,
+    statusFilter,
+    sortCol,
+    sortDir,
+    hiddenProjects,
+    showHidden,
+  ]);
+
+  const expandableIds = useMemo(
+    () =>
+      sortedProjects
+        .filter((p) => plan.tasks.some((t) => t.project_id === p.id))
+        .map((p) => p.id),
+    [sortedProjects, plan.tasks],
+  );
+  const allExpanded =
+    expandableIds.length > 0 && expandableIds.every((id) => expanded.has(id));
+
+  const toggleExpandAll = () => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      for (const id of expandableIds) {
+        if (allExpanded) next.delete(id);
+        else next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const toggleProjectHidden = (projectId: string) => {
+    setHiddenProjects((prev) => {
+      const next = new Set(prev);
+      if (next.has(projectId)) next.delete(projectId);
+      else next.add(projectId);
+      return next;
+    });
+  };
+
+  const visibleReorderItems = useMemo<ReorderItem[]>(() => {
+    const out: ReorderItem[] = [];
+    for (const p of sortedProjects) {
+      out.push({ type: 'project', id: p.id, projectId: p.id });
+      if (expanded.has(p.id)) {
+        const tasks = byManualOrder(plan.tasks.filter((t) => t.project_id === p.id));
+        for (const t of tasks) {
+          out.push({ type: 'task', id: t.id, projectId: p.id });
+        }
+      }
+    }
+    return out;
+  }, [sortedProjects, expanded, plan.tasks]);
+
+  const canReorder =
+    !isPresentationMode && sortCol === 'manual' && statusFilter !== 'archived';
+
+  const handleReorderDragState = (item: ReorderItem | null) => {
+    setReorderDrag(item);
+    if (!item) setDropTarget(null);
+  };
 
   const handleSort = (col: SortColumn, label: string) => {
     const nextDir: 'ascending' | 'descending' =
@@ -160,7 +276,23 @@ export function ProjectTableView() {
             borderColor: 'var(--border-default)',
           }}
         >
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {expandableIds.length > 0 && (
+              <button
+                type="button"
+                onClick={toggleExpandAll}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border font-medium hover:bg-slate-500/10 cursor-pointer"
+                style={{ borderColor: 'var(--border-default)' }}
+              >
+                {allExpanded ? (
+                  <ChevronsDownUp className="w-3.5 h-3.5" aria-hidden="true" />
+                ) : (
+                  <ChevronsUpDown className="w-3.5 h-3.5" aria-hidden="true" />
+                )}
+                <span>{allExpanded ? 'Collapse all' : 'Expand all'}</span>
+              </button>
+            )}
+
             <Filter
               className="w-3.5 h-3.5"
               style={{ color: 'var(--text-muted)' }}
@@ -188,13 +320,89 @@ export function ProjectTableView() {
                 backgroundColor: 'var(--bg-subtle)',
               }}
             >
-              <option value="all">All Statuses</option>
+              <option value="all">All Active Statuses</option>
               <option value="backlog">Backlog (Unscheduled)</option>
               <option value="planned">Planned</option>
               <option value="in_progress">In Progress</option>
               <option value="on_hold">On Hold</option>
               <option value="completed">Completed</option>
+              <option value="archived">Archived ({archivedCount})</option>
             </select>
+
+            {sortCol !== 'manual' && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSortCol('manual');
+                  setSortAnnouncement('Returned to manual project order');
+                }}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-blue-500/50 bg-blue-500/10 text-blue-700 dark:text-blue-300 font-medium cursor-pointer"
+              >
+                <ArrowDownUp className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>Reset to manual order</span>
+              </button>
+            )}
+
+            {hiddenCount > 0 && statusFilter !== 'archived' && (
+              <div className="inline-flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setShowHidden((s) => !s)}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border font-medium cursor-pointer ${
+                    showHidden
+                      ? 'border-amber-500/60 bg-amber-500/15 text-amber-800 dark:text-amber-300'
+                      : 'border-slate-400/50 bg-slate-500/10 hover:bg-slate-500/18'
+                  }`}
+                >
+                  {showHidden ? (
+                    <Eye className="w-3.5 h-3.5" aria-hidden="true" />
+                  ) : (
+                    <EyeOff className="w-3.5 h-3.5" aria-hidden="true" />
+                  )}
+                  <span>
+                    {showHidden ? `Showing ${hiddenCount} hidden` : `${hiddenCount} hidden`}
+                  </span>
+                </button>
+                {showHidden && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setHiddenProjects(() => new Set());
+                      setShowHidden(false);
+                    }}
+                    className="px-2 py-1 rounded text-[11px] text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
+                  >
+                    Unhide all
+                  </button>
+                )}
+              </div>
+            )}
+
+            {(archivedCount > 0 || statusFilter === 'archived') && (
+              <button
+                type="button"
+                onClick={() =>
+                  setStatusFilter((s) => (s === 'archived' ? 'all' : 'archived'))
+                }
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border font-medium cursor-pointer ${
+                  statusFilter === 'archived'
+                    ? 'border-amber-500/60 bg-amber-500/15 text-amber-800 dark:text-amber-300'
+                    : 'hover:bg-slate-500/10'
+                }`}
+                style={
+                  statusFilter === 'archived'
+                    ? undefined
+                    : { borderColor: 'var(--border-default)' }
+                }
+              >
+                <Archive className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>
+                  {statusFilter === 'archived'
+                    ? `Viewing Archived (${archivedCount})`
+                    : `Archived (${archivedCount})`}
+                </span>
+              </button>
+            )}
           </div>
 
           <button
@@ -260,9 +468,12 @@ export function ProjectTableView() {
 
           <tbody>
             {sortedProjects.map((proj) => {
-              const childTasks = plan.tasks.filter((t) => t.project_id === proj.id);
+              const childTasks = byManualOrder(
+                plan.tasks.filter((t) => t.project_id === proj.id),
+              );
               const hasTasks = childTasks.length > 0;
               const isOpen = expanded.has(proj.id);
+              const isHidden = hiddenProjects.has(proj.id);
               const metrics = computeScheduleMetrics(proj);
 
               const projAsgs = plan.assignments.filter((a) => a.project_id === proj.id);
@@ -276,14 +487,115 @@ export function ProjectTableView() {
               );
               const tbdSlots = projAsgs.filter((a) => !a.person_id);
 
+              const projRowKey = `project:${proj.id}`;
+              const projReorderItem: ReorderItem = {
+                type: 'project',
+                id: proj.id,
+                projectId: proj.id,
+              };
+              const projIndicator = dropIndicatorShadow(
+                dropTarget?.rowKey === projRowKey ? dropTarget.placement : null,
+              );
+
               return (
                 <React.Fragment key={proj.id}>
-                  <tr className="hover:bg-slate-500/4">
+                  <tr
+                    data-reorder-row
+                    onDragOver={(e) => {
+                      if (
+                        !canReorder ||
+                        !reorderDrag ||
+                        !e.dataTransfer.types.includes(REORDER_MIME)
+                      ) {
+                        return;
+                      }
+                      const placement = resolveReorderDrop(
+                        reorderDrag,
+                        projReorderItem,
+                        e.clientY,
+                        e.currentTarget.getBoundingClientRect(),
+                      );
+                      if (placement) {
+                        e.preventDefault();
+                        e.dataTransfer.dropEffect = 'move';
+                        if (
+                          dropTarget?.rowKey !== projRowKey ||
+                          dropTarget.placement !== placement
+                        ) {
+                          setDropTarget({ rowKey: projRowKey, placement });
+                        }
+                      }
+                    }}
+                    onDragLeave={(e) => {
+                      if (
+                        dropTarget?.rowKey === projRowKey &&
+                        !e.currentTarget.contains(e.relatedTarget as Node | null)
+                      ) {
+                        setDropTarget(null);
+                      }
+                    }}
+                    onDrop={(e) => {
+                      if (!canReorder || !e.dataTransfer.types.includes(REORDER_MIME)) {
+                        return;
+                      }
+                      const raw = e.dataTransfer.getData(REORDER_MIME);
+                      if (!raw) return;
+                      try {
+                        const dragged = JSON.parse(raw) as ReorderItem;
+                        const placement = resolveReorderDrop(
+                          dragged,
+                          projReorderItem,
+                          e.clientY,
+                          e.currentTarget.getBoundingClientRect(),
+                        );
+                        if (placement) {
+                          e.preventDefault();
+                          applyReorderDrop(dragged, projReorderItem, placement, {
+                            reorderProject,
+                            reorderTask,
+                          });
+                        }
+                      } catch {
+                        // ignore malformed drag payload
+                      } finally {
+                        setReorderDrag(null);
+                        setDropTarget(null);
+                      }
+                    }}
+                    style={{ boxShadow: projIndicator }}
+                    className={`group hover:bg-slate-500/4 ${isHidden ? 'opacity-65' : ''}`}
+                  >
                     <td
                       className="py-2 px-3 border-b"
-                      style={{ borderColor: 'var(--border-default)' }}
+                      style={{
+                        borderColor: 'var(--border-default)',
+                        boxShadow: projIndicator,
+                      }}
                     >
                       <div className="flex items-center gap-1.5">
+                        {!isPresentationMode &&
+                          statusFilter !== 'archived' &&
+                          (canReorder ? (
+                            <ReorderHandle
+                              item={projReorderItem}
+                              label={proj.name}
+                              onDragStateChange={handleReorderDragState}
+                              onKeyboardMove={(delta) =>
+                                keyboardReorder(visibleReorderItems, projReorderItem, delta, {
+                                  reorderProject,
+                                  reorderTask,
+                                })
+                              }
+                            />
+                          ) : (
+                            <span
+                              title='Column sort active — click "Reset to manual order" to drag-reorder'
+                              className="p-0.5 -ml-1 opacity-20 shrink-0 cursor-not-allowed"
+                            >
+                              <GripVertical className="w-3.5 h-3.5" aria-hidden="true" />
+                            </span>
+                          ))}
+
                         {hasTasks ? (
                           <button
                             type="button"
@@ -327,8 +639,57 @@ export function ProjectTableView() {
                                 updateProject(proj.id, { name: e.target.value })
                               }
                               aria-label="Project name"
-                              className="font-semibold bg-transparent px-1 py-0.5 rounded hover:bg-slate-500/8 focus:bg-slate-500/10 flex-1 min-w-[160px]"
+                              className="font-semibold bg-transparent px-1 py-0.5 rounded hover:bg-slate-500/8 focus:bg-slate-500/10 flex-1 min-w-[140px]"
                             />
+                            {proj.archived ? (
+                              <button
+                                type="button"
+                                onClick={() => setProjectsArchived([proj.id], false)}
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-500/15 hover:bg-amber-500/25 text-amber-800 dark:text-amber-300 text-[11px] font-semibold cursor-pointer shrink-0 print:hidden"
+                              >
+                                <ArchiveRestore className="w-3 h-3" aria-hidden="true" />
+                                Restore
+                              </button>
+                            ) : (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => toggleProjectHidden(proj.id)}
+                                  title={
+                                    isHidden
+                                      ? `Unhide ${proj.name}`
+                                      : `Hide ${proj.name} from your view`
+                                  }
+                                  aria-label={
+                                    isHidden ? `Unhide ${proj.name}` : `Hide ${proj.name}`
+                                  }
+                                  className={`p-1 rounded cursor-pointer shrink-0 print:hidden ${
+                                    isHidden
+                                      ? 'text-amber-600 dark:text-amber-400 bg-amber-500/15'
+                                      : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:bg-slate-500/15'
+                                  }`}
+                                  style={isHidden ? undefined : { color: 'var(--text-muted)' }}
+                                >
+                                  {isHidden ? (
+                                    <Eye className="w-3.5 h-3.5" aria-hidden="true" />
+                                  ) : (
+                                    <EyeOff className="w-3.5 h-3.5" aria-hidden="true" />
+                                  )}
+                                </button>
+                                {proj.status === 'completed' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setProjectsArchived([proj.id], true)}
+                                    title={`Archive ${proj.name}`}
+                                    aria-label={`Archive ${proj.name}`}
+                                    className="p-1 rounded hover:bg-slate-500/15 cursor-pointer shrink-0 print:hidden"
+                                    style={{ color: 'var(--text-muted)' }}
+                                  >
+                                    <Archive className="w-3.5 h-3.5" aria-hidden="true" />
+                                  </button>
+                                )}
+                              </>
+                            )}
                             <button
                               type="button"
                               onClick={() =>
@@ -637,16 +998,113 @@ export function ProjectTableView() {
                         )
                         .filter((x): x is string => Boolean(x));
 
+                      const taskRowKey = `task:${task.id}`;
+                      const taskReorderItem: ReorderItem = {
+                        type: 'task',
+                        id: task.id,
+                        projectId: proj.id,
+                      };
+                      const taskIndicator = dropIndicatorShadow(
+                        dropTarget?.rowKey === taskRowKey ? dropTarget.placement : null,
+                      );
+
                       return (
                         <tr
                           key={task.id}
-                          style={{ backgroundColor: 'var(--bg-subtle)' }}
+                          data-reorder-row
+                          onDragOver={(e) => {
+                            if (
+                              !canReorder ||
+                              !reorderDrag ||
+                              !e.dataTransfer.types.includes(REORDER_MIME)
+                            ) {
+                              return;
+                            }
+                            const placement = resolveReorderDrop(
+                              reorderDrag,
+                              taskReorderItem,
+                              e.clientY,
+                              e.currentTarget.getBoundingClientRect(),
+                            );
+                            if (placement) {
+                              e.preventDefault();
+                              e.dataTransfer.dropEffect = 'move';
+                              if (
+                                dropTarget?.rowKey !== taskRowKey ||
+                                dropTarget.placement !== placement
+                              ) {
+                                setDropTarget({ rowKey: taskRowKey, placement });
+                              }
+                            }
+                          }}
+                          onDragLeave={(e) => {
+                            if (
+                              dropTarget?.rowKey === taskRowKey &&
+                              !e.currentTarget.contains(e.relatedTarget as Node | null)
+                            ) {
+                              setDropTarget(null);
+                            }
+                          }}
+                          onDrop={(e) => {
+                            if (!canReorder || !e.dataTransfer.types.includes(REORDER_MIME)) {
+                              return;
+                            }
+                            const raw = e.dataTransfer.getData(REORDER_MIME);
+                            if (!raw) return;
+                            try {
+                              const dragged = JSON.parse(raw) as ReorderItem;
+                              const placement = resolveReorderDrop(
+                                dragged,
+                                taskReorderItem,
+                                e.clientY,
+                                e.currentTarget.getBoundingClientRect(),
+                              );
+                              if (placement) {
+                                e.preventDefault();
+                                applyReorderDrop(dragged, taskReorderItem, placement, {
+                                  reorderProject,
+                                  reorderTask,
+                                });
+                              }
+                            } catch {
+                              // ignore malformed drag payload
+                            } finally {
+                              setReorderDrag(null);
+                              setDropTarget(null);
+                            }
+                          }}
+                          style={{
+                            backgroundColor: 'var(--bg-subtle)',
+                            boxShadow: taskIndicator,
+                          }}
                         >
                           <td
-                            className="py-1.5 pl-10 pr-3 border-b"
-                            style={{ borderColor: 'var(--border-default)' }}
+                            className="py-1.5 pl-8 pr-3 border-b"
+                            style={{
+                              borderColor: 'var(--border-default)',
+                              boxShadow: taskIndicator,
+                            }}
                           >
                             <div className="flex items-center gap-1.5">
+                              {!isPresentationMode &&
+                                statusFilter !== 'archived' &&
+                                (canReorder ? (
+                                  <ReorderHandle
+                                    item={taskReorderItem}
+                                    label={task.name}
+                                    onDragStateChange={handleReorderDragState}
+                                    onKeyboardMove={(delta) =>
+                                      keyboardReorder(
+                                        visibleReorderItems,
+                                        taskReorderItem,
+                                        delta,
+                                        { reorderProject, reorderTask },
+                                      )
+                                    }
+                                  />
+                                ) : (
+                                  <ReorderHandleSpacer />
+                                ))}
                               <HealthDot health={tm.health} />
                               {isPresentationMode ? (
                                 <span>{task.name}</span>
@@ -904,6 +1362,19 @@ export function ProjectTableView() {
                 </React.Fragment>
               );
             })}
+            {sortedProjects.length === 0 && (
+              <tr>
+                <td
+                  colSpan={10}
+                  className="p-8 text-center text-xs"
+                  style={{ color: 'var(--text-muted)' }}
+                >
+                  {statusFilter === 'archived'
+                    ? 'No archived projects yet. Archive completed projects from the Gantt Completed tray or project inspector.'
+                    : 'No projects match the active search or status filter.'}
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>

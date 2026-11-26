@@ -12,6 +12,7 @@ import {
 } from '../engine/dates';
 import { findViolatedDependencyIds } from '../engine/dependencies';
 import { comparePlans } from '../engine/diff';
+import { byManualOrder } from '../engine/ordering';
 import { computeScheduleMetrics } from '../engine/rollup';
 import type { EntityType, PlanDocument } from '../types/plan';
 
@@ -23,6 +24,7 @@ export interface SnapshotOptions {
   startIso: string;
   endIso: string;
   includeTasks: boolean;
+  includeCompleted?: boolean;
   todayIso: string;
   baselinePlan?: PlanDocument | null;
   baselineLabel?: string | null;
@@ -163,11 +165,15 @@ function renderRoadmapCanvas(
     assignees: string;
   }
 
-  const scheduledProjects = plan.projects.filter(
+  const nonArchived = byManualOrder(plan.projects).filter((p) => !p.archived);
+  const allScheduled = nonArchived.filter(
     (p): p is typeof p & { expected_start: string; expected_end: string } =>
       Boolean(p.expected_start && p.expected_end),
   );
-  const backlogCount = plan.projects.length - scheduledProjects.length;
+  const backlogCount = nonArchived.length - allScheduled.length;
+  const scheduledProjects = opts.includeCompleted
+    ? allScheduled
+    : allScheduled.filter((p) => p.status !== 'completed');
 
   const rows: SnapRow[] = [];
   for (const p of scheduledProjects) {
@@ -199,7 +205,7 @@ function renderRoadmapCanvas(
     });
 
     if (opts.includeTasks) {
-      const children = plan.tasks.filter(
+      const children = byManualOrder(plan.tasks).filter(
         (t): t is typeof t & { expected_start: string; expected_end: string } =>
           t.project_id === p.id && Boolean(t.expected_start && t.expected_end),
       );
@@ -478,7 +484,9 @@ function renderPeopleCanvas(
   const laneH = 22;
   const laneGap = 5;
 
-  const projectMap = new Map(plan.projects.map((p) => [p.id, p]));
+  const projectMap = new Map(
+    plan.projects.filter((p) => !p.archived).map((p) => [p.id, p]),
+  );
   const taskMap = new Map(plan.tasks.map((t) => [t.id, t]));
 
   interface GroupRow {

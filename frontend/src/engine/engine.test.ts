@@ -16,6 +16,11 @@ import {
 import { canAddDependency, previewDependencyCascade } from './dependencies';
 import { comparePlans } from './diff';
 import {
+  reorderProjectsInPlan,
+  reorderTasksInPlan,
+  sortProjects,
+} from './ordering';
+import {
   computeScheduleMetrics,
   recalculateProjectRollups,
   scheduleProjectFromBacklog,
@@ -393,6 +398,91 @@ describe('plan checkpoint comparison & ghost bar diff engine', () => {
     expect(projADiff.allocationChanges).toEqual([
       { name: 'Alice', beforePct: 100, afterPct: 50 },
     ]);
+  });
+
+  it('reorders projects and intra-project phases without cross-project phase moves or mutating manual order on sort lenses', () => {
+    const plan = basePlan();
+    plan.tasks = [
+      {
+        id: 't-a1',
+        project_id: 'proj-a',
+        name: 'Phase 1',
+        description: '',
+        expected_start: '2026-02-02',
+        actual_start: null,
+        expected_end: '2026-02-06',
+        original_expected_end: '2026-02-06',
+        required_by: null,
+        actual_end: null,
+        percent_complete: 100,
+        status: 'completed',
+        priority: 'medium',
+        notes: '',
+        sort_order: 0,
+      },
+      {
+        id: 't-a2',
+        project_id: 'proj-a',
+        name: 'Phase 2',
+        description: '',
+        expected_start: '2026-02-09',
+        actual_start: null,
+        expected_end: '2026-02-13',
+        original_expected_end: '2026-02-13',
+        required_by: null,
+        actual_end: null,
+        percent_complete: 0,
+        status: 'planned',
+        priority: 'medium',
+        notes: '',
+        sort_order: 1,
+      },
+      {
+        id: 't-b1',
+        project_id: 'proj-b',
+        name: 'Other Project Phase',
+        description: '',
+        expected_start: '2026-02-16',
+        actual_start: null,
+        expected_end: '2026-02-27',
+        original_expected_end: '2026-02-27',
+        required_by: null,
+        actual_end: null,
+        percent_complete: 0,
+        status: 'planned',
+        priority: 'medium',
+        notes: '',
+        sort_order: 0,
+      },
+    ];
+
+    // Move proj-c before proj-a
+    const reordered = reorderProjectsInPlan(plan, 'proj-c', 'proj-a', 'before');
+    expect(reordered.projects.map((p) => [p.id, p.sort_order])).toEqual([
+      ['proj-c', 0],
+      ['proj-a', 1],
+      ['proj-b', 2],
+    ]);
+
+    // View-only sort by start date returns chronological order without mutating sort_order
+    const byStart = sortProjects(reordered.projects, 'start');
+    expect(byStart.map((p) => p.id)).toEqual(['proj-a', 'proj-b', 'proj-c']);
+    expect(sortProjects(reordered.projects, 'manual').map((p) => p.id)).toEqual([
+      'proj-c',
+      'proj-a',
+      'proj-b',
+    ]);
+
+    // Reorder phase within proj-a works; moving into proj-b is rejected
+    const tasksSwapped = reorderTasksInPlan(reordered, 't-a2', 't-a1', 'before');
+    expect(
+      tasksSwapped.tasks
+        .filter((t) => t.project_id === 'proj-a')
+        .sort((a, b) => a.sort_order - b.sort_order)
+        .map((t) => t.id),
+    ).toEqual(['t-a2', 't-a1']);
+    const crossMove = reorderTasksInPlan(tasksSwapped, 't-a2', 't-b1', 'after');
+    expect(crossMove).toBe(tasksSwapped);
   });
 });
 

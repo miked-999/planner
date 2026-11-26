@@ -27,6 +27,7 @@ export function resolveAssignmentWindow(
 
 export function isItemActiveForCapacity(item: Project | Task | undefined): boolean {
   if (!item) return false;
+  if ('archived' in item && item.archived) return false;
   return (
     item.status !== 'completed' &&
     item.status !== 'on_hold' &&

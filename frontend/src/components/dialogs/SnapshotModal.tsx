@@ -27,7 +27,8 @@ export function SnapshotModal() {
   const [preset, setPreset] = useState<RangePreset>('12w');
   const [customStart, setCustomStart] = useState(todayIso);
   const [customEnd, setCustomEnd] = useState(() => addCalendarDays(todayIso, 84));
-  const [includeTasks, setIncludeTasks] = useState(true);
+  const [includeTasks, setIncludeTasks] = useState(false);
+  const [includeCompleted, setIncludeCompleted] = useState(false);
   const [includeBaselineGhost, setIncludeBaselineGhost] = useState(true);
   const [title, setTitle] = useState('Team Project & Resource Plan');
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
@@ -51,11 +52,14 @@ export function SnapshotModal() {
       return { startIso: startMon, endIso: addCalendarDays(startMon, 12 * 7 - 3) };
     }
     if (preset === 'full' && plan.projects.length > 0) {
-      const starts = plan.projects
+      const visible = plan.projects.filter(
+        (p) => !p.archived && (includeCompleted || p.status !== 'completed'),
+      );
+      const starts = visible
         .map((p) => p.expected_start)
         .filter((d): d is string => Boolean(d))
         .sort();
-      const ends = plan.projects
+      const ends = visible
         .map((p) => p.expected_end)
         .filter((d): d is string => Boolean(d))
         .sort();
@@ -70,7 +74,7 @@ export function SnapshotModal() {
       startIso: customStart,
       endIso: customEnd < customStart ? customStart : customEnd,
     };
-  }, [preset, todayIso, plan.projects, customStart, customEnd]);
+  }, [preset, todayIso, plan.projects, includeCompleted, customStart, customEnd]);
 
   const { canvas, previewUrl } = useMemo(() => {
     if (!snapshotModalOpen) return { canvas: null, previewUrl: '' };
@@ -81,6 +85,7 @@ export function SnapshotModal() {
       startIso,
       endIso,
       includeTasks,
+      includeCompleted,
       todayIso,
       baselinePlan: useGhost ? activeBaseline!.plan : null,
       baselineLabel: useGhost ? activeBaseline!.label : null,
@@ -94,6 +99,7 @@ export function SnapshotModal() {
     startIso,
     endIso,
     includeTasks,
+    includeCompleted,
     includeBaselineGhost,
     activeBaseline,
     todayIso,
@@ -221,6 +227,15 @@ export function SnapshotModal() {
                   onChange={(e) => setIncludeTasks(e.target.checked)}
                 />
                 <span>Include project phases / subtasks</span>
+              </label>
+
+              <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={includeCompleted}
+                  onChange={(e) => setIncludeCompleted(e.target.checked)}
+                />
+                <span>Include completed projects</span>
               </label>
 
               {activeBaseline && (
